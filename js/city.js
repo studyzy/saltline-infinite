@@ -13,8 +13,14 @@
 import * as THREE from "./vendor/three.module.js";
 
 const CELL = 40; // metres per block, roads included
-const NEAR = 2; // detailed blocks within +/-NEAR cells
-const FAR = 8; // silhouette blocks out to +/-FAR cells
+
+// Every block you can physically reach must be the solid, collidered version.
+// The old split was NET detailed blocks within +/-NEAR cells (about +/-80 m) and
+// bare silhouettes beyond, which meant that past 80 m the city was scenery you
+// walked straight through. The horizon layer now starts only past SOLID ring,
+// and the fog closes well before it, so nothing interactive is ever a prop.
+const SOLID = 5; // collidered blocks out to +/-SOLID cells (+/-200 m)
+const FAR = 9; // flat silhouette blocks out to +/-FAR cells
 const ROAD = 9; // road strip on the west and south edge of a block
 const PAVE = 2.4; // pavement band around a lot
 const KERB = 0.14;
@@ -211,7 +217,7 @@ export function createCity(game) {
 
   // ---- one detailed block -------------------------------------------------
 
-  function buildNear(cx, cz) {
+  function buildNear(cx, cz, detail = 2) {
     const r = stream(cx, cz);
     const geos = new Map();
     const boxes = [];
@@ -255,6 +261,65 @@ export function createCity(game) {
 
     const x0 = cx * CELL;
     const z0 = cz * CELL;
+
+    // ---- level 1: block-out ------------------------------------------------
+    // Past the detailed ring the block is still a real, collided city block —
+    // it just drops the facade micro-detail. A single massing box per tower
+    // keeps the pedestrian's view of a near block identical while cutting the
+    // triangle count by roughly 4x over 200 m of city.
+    if (detail < 2) {
+      const lx0 = x0 + ROAD + PAVE * 0.5;
+      const lz0 = z0 + ROAD + PAVE * 0.5;
+      const lw0 = CELL - ROAD - PAVE * 1.5;
+      const ld0 = CELL - ROAD - PAVE * 1.5;
+      push(MAT.pave, placed(boxGeo(lw0, KERB, ld0), lx0 + lw0 / 2, KERB / 2, lz0 + ld0 / 2));
+      const baseY0 = KERB;
+      const lot0 = { x: lx0 + 0.9, z: lz0 + 0.9, w: lw0 - 1.8, d: ld0 - 1.8 };
+      const kind0 = r();
+      if (kind0 < 0.22) {
+        // yard: one slab plus the container stacks, still solid
+        push(MAT.dark, placed(boxGeo(lot0.w, 0.16, lot0.d), lot0.x + lot0.w / 2, baseY0 + 0.08, lot0.z + lot0.d / 2));
+        for (let i = 0; i < r.int(2, 4); i++) {
+          const cw0 = r.chance(0.5) ? 6.06 : 12.19;
+          const n0 = r.int(1, 3);
+          const cx0 = lot0.x + r.range(1, Math.max(1.2, lot0.w - cw0 - 1)) + cw0 / 2;
+          const cz0 = lot0.z + r.range(2.5, Math.max(3, lot0.d - 3.4)) + 1.22;
+          solid(
+            r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal",
+            cw0, 2.59 * n0, 2.44, cx0, baseY0 + 0.16 + (2.59 * n0) / 2, cz0,
+            { surface: "metal" },
+          );
+        }
+      } else {
+        const cols0 = kind0 < 0.6 ? 1 : 2;
+        const rows0 = r() < 0.5 ? 1 : 2;
+        const cw0 = lot0.w / cols0;
+        const cd0 = lot0.d / rows0;
+        for (let i = 0; i < cols0; i++)
+          for (let j = 0; j < rows0; j++) {
+            if (cols0 * rows0 > 1 && r() < 0.16) continue;
+            const pad0 = 1.2 + r() * 1.6;
+            const w0 = Math.min(cw0 - pad0, 26);
+            const d0 = Math.min(cd0 - pad0, 26);
+            if (w0 < 3 || d0 < 3) continue;
+            const tall0 = r.chance(0.55);
+            const floors0 = tall0 ? r.int(4, 11) : r.int(1, 4);
+            const fh0 = r.range(3.0, 3.6);
+            const h0 = floors0 * fh0;
+            const px0 = lot0.x + i * cw0 + pad0 * 0.5 + w0 / 2;
+            const pz0 = lot0.z + j * cd0 + pad0 * 0.5 + d0 / 2;
+            solid(
+              r.pick([MAT.wallA, MAT.wallB, MAT.wallC, MAT.wallA, MAT.wallB]),
+              w0, h0, d0, px0, baseY0 + h0 / 2, pz0, { surface: "concrete" },
+            );
+            // parapet so the roofline is not a bare cut
+            solid(MAT.wallB, w0 + 0.36, 0.7, d0 + 0.36, px0, baseY0 + h0 + 0.35, pz0, {
+              surface: "concrete",
+            });
+          }
+      }
+      return { geos, boxes, gc };
+    }
 
     // road paint on the west/south strips
     for (let k = 0; k < 3; k++) {
@@ -710,13 +775,26 @@ export function createCity(game) {
     return g;
   }
 
+  // Detail level for a block, from its ring distance to the player.
+  //   0-1 cells  -> 2 (full facade, windows, roof clutter, street props)
+  //   2+ cells   -> 1 (solid massing: same collision, no micro-detail)
+  // Both are collidered, so there is no radius beyond which you can walk
+  // through the city — only one beyond which it stops being pretty up close.
+  const DETAIL_RING = 1;
+  let originCell = { x: 0, z: 0 };
+
+  function detailFor(cx, cz) {
+    return Math.max(Math.abs(cx - originCell.x), Math.abs(cz - originCell.z)) <= DETAIL_RING ? 2 : 1;
+  }
+
   function addNear(cx, cz) {
     const key = cx + "," + cz;
     if (nearCells.has(key)) return;
     // Reserve the slot first so a queued block is never built twice.
-    const cell = { key, cx, cz, group: null, boxRefs: [] };
+    const cell = { key, cx, cz, group: null, boxRefs: [], detail: 0 };
     nearCells.set(key, cell);
-    const data = buildNear(cx, cz);
+    cell.detail = detailFor(cx, cz);
+    const data = buildNear(cx, cz, cell.detail);
     cell.group = buildCellGroup(data.geos, cityMat, true);
     root.add(cell.group);
     for (const b of data.boxes) {
@@ -804,7 +882,7 @@ export function createCity(game) {
         const mx = cx * CELL + CELL / 2;
         if (mx > 24) continue; // east of the quay is water
         const ring = Math.max(Math.abs(dx), Math.abs(dz));
-        if (ring <= NEAR) near.add(cx + "," + cz);
+        if (ring <= SOLID) near.add(cx + "," + cz);
         else far.add(cx + "," + cz);
       }
     return { near, far };
@@ -949,7 +1027,19 @@ export function createCity(game) {
       const cz = Math.round(playerPos.z / CELL);
       if (!api._c || api._c.x !== cx || api._c.z !== cz) {
         api._c = { x: cx, z: cz };
+        originCell = { x: cx, z: cz };
         plan(cx, cz);
+      }
+      // A block that is now close enough to deserve full detail is rebuilt.
+      // Cheap to test, and it only ever fires for the handful of blocks that
+      // just entered the inner ring.
+      for (const cell of nearCells.values()) {
+        if (cell.detail === 2) continue;
+        if (detailFor(cell.cx, cell.cz) < 2) continue;
+        removeNear(cell.key);
+        pending.unshift({ cx: cell.cx, cz: cell.cz, far: false });
+        queued = pending.length;
+        break;
       }
       pump();
       setShadowFollow(!inPort(playerPos.x, playerPos.z), playerPos.x, playerPos.z);
@@ -1001,4 +1091,4 @@ export function createCity(game) {
   return api;
 }
 
-export const CITY_GRID = { CELL, NEAR, FAR, RESERVED };
+export const CITY_GRID = { CELL, SOLID, FAR, RESERVED };
