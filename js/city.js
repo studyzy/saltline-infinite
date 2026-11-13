@@ -215,28 +215,31 @@ export function createCity(game) {
     }
   }
 
-  // ---- one detailed block -------------------------------------------------
+  // ---- one block ----------------------------------------------------------
+  //
+  // A block is laid out ONCE, by planBlock(), and then drawn at whatever detail
+  // level is being asked for. The plan owns every solid volume in the block:
+  // the yard fence, the container stacks, the drums, the tower bodies, the
+  // street furniture, the lamp mast. Both detail levels draw that same plan and
+  // register their colliders through the same function, so a block can never
+  // change shape underneath the player.
+  //
+  // That was the real bug behind "the containers are walk-through". The layout
+  // used to be re-rolled per detail level: the massing build and the detailed
+  // build each pulled the block out of their own random stream, so walking up
+  // to a yard rebuilt it with the containers at different coordinates and, at
+  // the inner ring, dropped a 2.2 m fence around it. Standing where the new
+  // container landed meant standing inside a solid, and two overlapping boxes
+  // then pushed the capsule back and forth every frame — you were inside the
+  // container, and you could not get out. Detail now only adds decoration.
 
-  function buildNear(cx, cz, detail = 2) {
-    const r = stream(cx, cz);
-    const geos = new Map();
-    const boxes = [];
-    const gc = []; // geometries to dispose with the cell
-    const push = (bucketName, geo) => {
-      bucket(geos, bucketName).push(geo);
-      gc.push(geo);
-    };
+  const GAP = 0.16; // clearance between separate props
+  const EPS = 0.001; // faces that merely touch are not an overlap
 
-    // Freestanding props used to be placed at independent random coordinates
-    // with no overlap test, so a drum could land inside a container, two
-    // containers could merge into one slab and a bollard could sit inside a
-    // dumpster. Every solid volume claims its footprint here; random props
-    // must find a free spot before they are drawn. Structural parts (plinth,
-    // parapet, awning, roof kit) deliberately overlap the volume they belong
-    // to, so they only claim, they never reject.
-    const occupied = [];
-    const GAP = 0.16; // clearance between separate props
-    const EPS = 0.001; // faces that merely touch are not an overlap
+  // One occupancy registry per block. Every solid volume claims its footprint;
+  // random props must find a free spot before they are drawn.
+  function makeOcc() {
+    const taken = [];
     const footprint = (w, d, x, z, ry) => {
       const c = Math.abs(Math.cos(ry));
       const s = Math.abs(Math.sin(ry));
@@ -244,171 +247,141 @@ export function createCity(game) {
       const hd = (w * s + d * c) / 2 + GAP;
       return { minX: x - hw, maxX: x + hw, minZ: z - hd, maxZ: z + hd };
     };
-    const occ = {
-      free(w, h, d, x, y, z, ry = 0) {
-        const f = footprint(w, d, x, z, ry);
-        const y0 = y - h / 2;
-        const y1 = y + h / 2;
-        for (const o of occupied)
-          if (
-            f.minX < o.maxX &&
-            f.maxX > o.minX &&
-            f.minZ < o.maxZ &&
-            f.maxZ > o.minZ &&
-            y0 < o.maxY - EPS &&
-            y1 > o.minY + EPS
-          )
-            return false;
-        return true;
+    const hit = (f, minY, maxY) => {
+      for (const o of taken)
+        if (
+          f.minX < o.maxX &&
+          f.maxX > o.minX &&
+          f.minZ < o.maxZ &&
+          f.maxZ > o.minZ &&
+          minY < o.maxY - EPS &&
+          maxY > o.minY + EPS
+        )
+          return true;
+      return false;
+    };
+    return {
+      free: (w, h, d, x, y, z, ry = 0) => !hit(footprint(w, d, x, z, ry), y - h / 2, y + h / 2),
+      claim: (w, h, d, x, y, z, ry = 0) => {
+        taken.push({ ...footprint(w, d, x, z, ry), minY: y - h / 2, maxY: y + h / 2 });
       },
-      claim(w, h, d, x, y, z, ry = 0) {
-        occupied.push({
-          ...footprint(w, d, x, z, ry),
-          minY: y - h / 2,
-          maxY: y + h / 2,
-        });
+      freeBox: (minX, minZ, maxX, maxZ, minY, maxY) => !hit({ minX, maxX, minZ, maxZ }, minY, maxY),
+      claimBox: (minX, minZ, maxX, maxZ, minY, maxY) => {
+        taken.push({ minX, maxX, minZ, maxZ, minY, maxY });
       },
     };
+  }
 
-    // Emit one solid volume: the visible box and its collider are derived from
-    // the same numbers, so nothing can be drawn without also being solid.
-    // Colliders are inflated to MIN_SOLID on every axis (a zero-thickness pane
-    // or a 6 cm pipe is otherwise walked straight through).
-    const solid = (name, w, h, d, x, y, z, opts = {}) => {
-      const ry = opts.ry || 0;
-      push(name, placed(boxGeo(w, h, d), x, y, z, ry));
-      occ.claim(w, h, d, x, y, z, ry);
-      const cw = Math.max(w, MIN_SOLID);
-      const ch = Math.max(h, MIN_SOLID);
-      const cd = Math.max(d, MIN_SOLID);
-      if (opts.noCol) return;
-      // Rotated boxes get their collider widened to the swept footprint so the
-      // player can never clip a corner.
-      if (Math.abs(ry) > 1e-3) {
-        const c = Math.abs(Math.cos(ry));
-        const sn = Math.abs(Math.sin(ry));
-        const sw = cw * c + cd * sn;
-        const sd = cw * sn + cd * c;
-        boxes.push({
-          min: [x - sw / 2, y - ch / 2, z - sd / 2],
-          max: [x + sw / 2, y + ch / 2, z + sd / 2],
-          surface: opts.surface || "concrete",
-        });
-        return;
-      }
-      boxes.push({
-        min: [x - cw / 2, y - ch / 2, z - cd / 2],
-        max: [x + cw / 2, y + ch / 2, z + cd / 2],
-        surface: opts.surface || "concrete",
-      });
+  // A collider derived from a visible volume: inflated to MIN_SOLID on every
+  // axis (a zero-thickness pane or a 6 cm pipe is otherwise walked through) and
+  // widened to the swept footprint when the box is rotated. solid() uses this
+  // too, so a planned collider and a drawn one can never drift apart.
+  function boxCol(w, h, d, x, y, z, ry, surface) {
+    const cw = Math.max(w, MIN_SOLID);
+    const ch = Math.max(h, MIN_SOLID);
+    const cd = Math.max(d, MIN_SOLID);
+    if (Math.abs(ry) > 1e-3) {
+      const c = Math.abs(Math.cos(ry));
+      const s = Math.abs(Math.sin(ry));
+      const sw = cw * c + cd * s;
+      const sd = cw * s + cd * c;
+      return {
+        min: [x - sw / 2, y - ch / 2, z - sd / 2],
+        max: [x + sw / 2, y + ch / 2, z + sd / 2],
+        surface,
+      };
+    }
+    return {
+      min: [x - cw / 2, y - ch / 2, z - cd / 2],
+      max: [x + cw / 2, y + ch / 2, z + cd / 2],
+      surface,
     };
+  }
 
-    // Same as solid(), but only when the spot is free. Returns false instead
-    // of drawing into (or adding a collider inside) another prop.
-    const trySolid = (name, w, h, d, x, y, z, opts = {}) => {
-      if (!occ.free(w, h, d, x, y, z, opts.ry || 0)) return false;
-      solid(name, w, h, d, x, y, z, opts);
-      return true;
-    };
+  // ---- block layout ------------------------------------------------------
 
+  function planBlock(cx, cz) {
+    const r = stream(cx * 7 + 3, cz * 11 - 5);
+    const occ = makeOcc();
     const x0 = cx * CELL;
     const z0 = cz * CELL;
-
-    // ---- level 1: block-out ------------------------------------------------
-    // Past the detailed ring the block is still a real, collided city block —
-    // it just drops the facade micro-detail. A single massing box per tower
-    // keeps the pedestrian's view of a near block identical while cutting the
-    // triangle count by roughly 4x over 200 m of city.
-    if (detail < 2) {
-      const lx0 = x0 + ROAD + PAVE * 0.5;
-      const lz0 = z0 + ROAD + PAVE * 0.5;
-      const lw0 = CELL - ROAD - PAVE * 1.5;
-      const ld0 = CELL - ROAD - PAVE * 1.5;
-      push(MAT.pave, placed(boxGeo(lw0, KERB, ld0), lx0 + lw0 / 2, KERB / 2, lz0 + ld0 / 2));
-      const baseY0 = KERB;
-      const lot0 = { x: lx0 + 0.9, z: lz0 + 0.9, w: lw0 - 1.8, d: ld0 - 1.8 };
-      const kind0 = r();
-      if (kind0 < 0.22) {
-        // yard: one slab plus the container stacks, still solid
-        push(MAT.dark, placed(boxGeo(lot0.w, 0.16, lot0.d), lot0.x + lot0.w / 2, baseY0 + 0.08, lot0.z + lot0.d / 2));
-        const count0 = r.int(2, 4);
-        for (let i = 0; i < count0; i++)
-          for (let attempt = 0; attempt < 8; attempt++) {
-            const cw0 = r.chance(0.5) ? 6.06 : 12.19;
-            const n0 = r.int(1, 3);
-            const cx0 = lot0.x + r.range(1, Math.max(1.2, lot0.w - cw0 - 1)) + cw0 / 2;
-            const cz0 = lot0.z + r.range(2.5, Math.max(3, lot0.d - 3.4)) + 1.22;
-            const name0 = r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal";
-            if (trySolid(name0, cw0, 2.59 * n0, 2.44, cx0, baseY0 + 0.16 + (2.59 * n0) / 2, cz0, { surface: "metal" }))
-              break;
-          }
-      } else {
-        const cols0 = kind0 < 0.6 ? 1 : 2;
-        const rows0 = r() < 0.5 ? 1 : 2;
-        const cw0 = lot0.w / cols0;
-        const cd0 = lot0.d / rows0;
-        for (let i = 0; i < cols0; i++)
-          for (let j = 0; j < rows0; j++) {
-            if (cols0 * rows0 > 1 && r() < 0.16) continue;
-            const pad0 = 1.2 + r() * 1.6;
-            const w0 = Math.min(cw0 - pad0, 26);
-            const d0 = Math.min(cd0 - pad0, 26);
-            if (w0 < 3 || d0 < 3) continue;
-            const tall0 = r.chance(0.55);
-            const floors0 = tall0 ? r.int(4, 11) : r.int(1, 4);
-            const fh0 = r.range(3.0, 3.6);
-            const h0 = floors0 * fh0;
-            const px0 = lot0.x + i * cw0 + pad0 * 0.5 + w0 / 2;
-            const pz0 = lot0.z + j * cd0 + pad0 * 0.5 + d0 / 2;
-            solid(
-              r.pick([MAT.wallA, MAT.wallB, MAT.wallC, MAT.wallA, MAT.wallB]),
-              w0,
-              h0,
-              d0,
-              px0,
-              baseY0 + h0 / 2,
-              pz0,
-              { surface: "concrete" },
-            );
-            // parapet so the roofline is not a bare cut
-            solid(MAT.wallB, w0 + 0.36, 0.7, d0 + 0.36, px0, baseY0 + h0 + 0.35, pz0, {
-              surface: "concrete",
-            });
-          }
-      }
-      return { geos, boxes, gc };
-    }
-
-    // road paint on the west/south strips
-    for (let k = 0; k < 3; k++) {
-      const t = z0 + 6 + k * 12;
-      const dash = new THREE.PlaneGeometry(0.16, 4).rotateX(-Math.PI / 2);
-      dash.translate(x0 + ROAD * 0.5, 0.02, t);
-      push(MAT.paintY, dash.toNonIndexed());
-    }
-    for (let k = 0; k < 3; k++) {
-      const dash = new THREE.PlaneGeometry(4, 0.16).rotateX(-Math.PI / 2);
-      dash.translate(x0 + 20 + k * 6, 0.02, z0 + ROAD * 0.5);
-      push(MAT.paintY, dash.toNonIndexed());
-    }
-
-    // lot: pavement plinth
     const lx = x0 + ROAD + PAVE * 0.5;
     const lz = z0 + ROAD + PAVE * 0.5;
     const lw = CELL - ROAD - PAVE * 1.5;
     const ld = CELL - ROAD - PAVE * 1.5;
-    push(MAT.pave, placed(boxGeo(lw, KERB, ld), lx + lw / 2, KERB / 2, lz + ld / 2));
-    push(MAT.kerb, placed(boxGeo(lw + 0.3, 0.06, 0.3), lx + lw / 2, KERB + 0.03, lz + ld));
-    push(MAT.kerb, placed(boxGeo(0.3, 0.06, ld + 0.3), lx + lw, KERB + 0.03, lz + ld / 2));
-
     const baseY = KERB;
     const lot = { x: lx + 0.9, z: lz + 0.9, w: lw - 1.8, d: ld - 1.8 };
+    const plan = {
+      x0,
+      z0,
+      lx,
+      lz,
+      lw,
+      ld,
+      lot,
+      baseY,
+      type: "towers",
+      fence: null,
+      stacks: [],
+      drums: [],
+      towers: [],
+      props: [],
+      lamp: null,
+    };
 
     const kind = r();
     if (kind < 0.22) {
-      // low yard: container stacks, fenced compound
-      buildYard(push, solid, trySolid, occ, boxes, r, lot, baseY);
+      // ---- container yard ----
+      plan.type = "yard";
+      const fenceH = 2.2;
+      const fw = MIN_SOLID;
+      const x1 = lot.x + lot.w;
+      const z1 = lot.z + lot.d;
+      const fh = baseY + fenceH;
+      plan.fence = { x0: lot.x, z0: lot.z, x1, z1, h: fenceH, fw, baseY };
+      // One wall per side, and the four walls are claimed so no prop can be
+      // dropped inside them.
+      const walls = [
+        { minX: lot.x, maxX: x1, minZ: lot.z - fw / 2, maxZ: lot.z + fw / 2 },
+        { minX: lot.x, maxX: x1, minZ: z1 - fw / 2, maxZ: z1 + fw / 2 },
+        { minX: lot.x - fw / 2, maxX: lot.x + fw / 2, minZ: lot.z, maxZ: z1 },
+        { minX: x1 - fw / 2, maxX: x1 + fw / 2, minZ: lot.z, maxZ: z1 },
+      ];
+      for (const w of walls) occ.claimBox(w.minX, w.minZ, w.maxX, w.maxZ, 0, fh);
+
+      for (let i = 0, n = r.int(2, 4); i < n; i++)
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const cw = r.chance(0.5) ? 6.06 : 12.19;
+          const cd = 2.44;
+          const scx = lot.x + r.range(1, Math.max(1.2, lot.w - cw - 1)) + cw / 2;
+          const scz = lot.z + r.range(2.5, Math.max(3, lot.d - cd - 1)) + cd / 2;
+          const layers = r.int(1, 3);
+          const stackH = 0.16 + layers * 2.59;
+          if (!occ.free(cw, stackH, cd, scx, baseY + stackH / 2, scz)) continue;
+          const mats = [];
+          for (let k = 0; k < layers; k++)
+            mats.push(r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal");
+          occ.claim(cw, stackH, cd, scx, baseY + stackH / 2, scz);
+          plan.stacks.push({ cw, cd, layers, cx: scx, cz: scz, mats, h: stackH });
+          break;
+        }
+
+      // Drums: 90 cm tall, so they need a footprint or you walk through them.
+      // They carry a collider at every detail level, so they are planned here
+      // and simply drawn at both levels.
+      for (let i = 0, n = r.int(2, 5); i < n; i++)
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const dx = lot.x + r.range(1, lot.w - 1);
+          const dz = lot.z + r.range(1, lot.d - 1);
+          const top = baseY + 0.16 + 0.9;
+          if (!occ.free(0.6, top, 0.6, dx, top / 2, dz)) continue;
+          const mat = r.chance(0.5) ? "paint_yellow" : "paint_green";
+          occ.claim(0.6, top, 0.6, dx, top / 2, dz);
+          plan.drums.push({ x: dx, z: dz, mat });
+          break;
+        }
     } else {
+      // ---- towers ----
       const cols = kind < 0.6 ? 1 : 2;
       const rows = r() < 0.5 ? 1 : 2;
       const cw = lot.w / cols;
@@ -417,80 +390,212 @@ export function createCity(game) {
         for (let j = 0; j < rows; j++) {
           if (cols * rows > 1 && r() < 0.16) continue;
           const pad = 1.2 + r() * 1.6;
-          buildTower(
-            push,
-            solid,
-            trySolid,
-            occ,
-            r,
-            {
-              x: lot.x + i * cw + pad * 0.5,
-              z: lot.z + j * cd + pad * 0.5,
-              w: cw - pad,
-              d: cd - pad,
-            },
-            baseY,
-            cx,
-            cz,
-          );
+          const w = Math.min(cw - pad, 26);
+          const d = Math.min(cd - pad, 26);
+          if (w < 3 || d < 3) continue;
+          const tall = r.chance(0.55);
+          const floors = tall ? r.int(4, 11) : r.int(1, 4);
+          const fh = r.range(3.0, 3.6);
+          const wall = r.pick([MAT.wallA, MAT.wallB, MAT.wallC, MAT.wallA, MAT.wallB]);
+          const x = lot.x + i * cw + pad * 0.5 + w / 2;
+          const z = lot.z + j * cd + pad * 0.5 + d / 2;
+          plan.towers.push({ x, z, w, d, floors, fh, h: floors * fh, wall, tall });
+          // The ground-floor plinth is 12 cm proud of the body, so the claim
+          // is the plinth, not the body.
+          occ.claimBox(x - w / 2 - 0.12, z - d / 2 - 0.12, x + w / 2 + 0.12, z + d / 2 + 0.12, baseY, baseY + floors * fh);
         }
     }
 
-    // street clutter along the road edge: retry a different spot rather than
-    // dropping a dumpster straight through a bollard or a lamp mast.
-    const clutter = r.int(0, 3);
-    for (let i = 0; i < clutter; i++)
+    // Street furniture along the road edge, planned like everything else so it
+    // does not pop into existence when the block upgrades.
+    for (let i = 0, n = r.int(0, 3); i < n; i++)
       for (let attempt = 0; attempt < 6; attempt++) {
         const px = x0 + ROAD - 1.1 + r.range(-0.5, 0.5);
         const pz = z0 + r.range(6, CELL - 4);
-        if (buildClutter(push, trySolid, occ, r, px, pz)) break;
+        const k = r();
+        if (k < 0.4) {
+          const ry = r.range(-0.4, 0.4);
+          if (!occ.free(1.9, 1.35, 1.1, px, 0.68, pz, ry)) continue;
+          occ.claim(1.9, 1.35, 1.1, px, 0.68, pz, ry);
+          plan.props.push({ kind: "dumpster", x: px, z: pz, ry });
+        } else if (k < 0.72) {
+          const spots = [
+            { x: px, z: pz },
+            { x: px + 0.7, z: pz + 0.2 },
+          ];
+          if (!spots.every((s) => occ.free(0.36, 0.7, 0.36, s.x, 0.35, s.z))) continue;
+          for (const s of spots) occ.claim(0.36, 0.7, 0.36, s.x, 0.35, s.z);
+          plan.props.push({ kind: "bollards", spots });
+        } else {
+          const ry = r.range(0, 3);
+          if (!occ.free(1.2, 1.1, 1.0, px, 0.55, pz, ry)) continue;
+          occ.claim(1.2, 1.1, 1.0, px, 0.55, pz, ry);
+          plan.props.push({ kind: "bin", x: px, z: pz, ry });
+        }
+        break;
       }
-    // one light mast per block, on the pavement corner
-    buildLamp(push, trySolid, r, x0 + ROAD + 0.6, z0 + ROAD + 0.6);
 
-    return { geos, boxes, gc };
+    // One light mast per block, on the pavement corner.
+    {
+      const mx = x0 + ROAD + 0.6;
+      const mz = z0 + ROAD + 0.6;
+      const h = r.range(7, 11);
+      if (occ.free(0.22, h, 0.22, mx, h / 2, mz)) {
+        occ.claim(0.22, h, 0.22, mx, h / 2, mz);
+        plan.lamp = { x: mx, z: mz, h };
+      }
+    }
+
+    return plan;
   }
 
-  function buildTower(push, solid, trySolid, occ, r, lot, baseY, cx, cz) {
-    if (lot.w < 3 || lot.d < 3) return;
-    const w = Math.min(lot.w, 26);
-    const d = Math.min(lot.d, 26);
-    const cxw = lot.x + w / 2;
-    const czw = lot.z + d / 2;
-    const tall = r.chance(0.55);
-    const floors = tall ? r.int(4, 11) : r.int(1, 4);
-    const fh = r.range(3.0, 3.6);
-    const h = floors * fh;
-    const wall = r.pick([MAT.wallA, MAT.wallB, MAT.wallC, MAT.wallA, MAT.wallB]);
-    const style = r();
+  // Every collider in a block comes from here — once — so the massing build and
+  // the detailed build expose exactly the same collision at ground level.
+  function planColliders(plan) {
+    const out = [];
+    const { baseY } = plan;
+    if (plan.fence) {
+      const f = plan.fence;
+      const fh = baseY + f.h;
+      const fw = f.fw;
+      out.push(boxCol(f.x1 - f.x0, fh, fw, (f.x0 + f.x1) / 2, fh / 2, f.z0, 0, "metal"));
+      out.push(boxCol(f.x1 - f.x0, fh, fw, (f.x0 + f.x1) / 2, fh / 2, f.z1, 0, "metal"));
+      out.push(boxCol(fw, fh, f.z1 - f.z0, f.x0, fh / 2, (f.z0 + f.z1) / 2, 0, "metal"));
+      out.push(boxCol(fw, fh, f.z1 - f.z0, f.x1, fh / 2, (f.z0 + f.z1) / 2, 0, "metal"));
+    }
+    for (const s of plan.stacks)
+      out.push(boxCol(s.cw, s.h, s.cd, s.cx, baseY + s.h / 2, s.cz, 0, "metal"));
+    for (const d of plan.drums) {
+      const top = baseY + 0.16 + 0.9;
+      out.push(boxCol(0.6, top, 0.6, d.x, top / 2, d.z, 0, "metal"));
+    }
+    for (const t of plan.towers) {
+      out.push(boxCol(t.w, t.h, t.d, t.x, baseY + t.h / 2, t.z, 0, "concrete"));
+      out.push(boxCol(t.w + 0.24, t.fh * 0.9, t.d + 0.24, t.x, baseY + t.fh * 0.45, t.z, 0, "concrete"));
+    }
+    for (const p of plan.props) {
+      if (p.kind === "dumpster") out.push(boxCol(1.9, 1.35, 1.1, p.x, 0.68, p.z, p.ry, "metal"));
+      else if (p.kind === "bollards") for (const s of p.spots) out.push(boxCol(0.36, 0.7, 0.36, s.x, 0.35, s.z, 0, "concrete"));
+      else out.push(boxCol(1.2, 1.1, 1.0, p.x, 0.55, p.z, p.ry, "metal"));
+    }
+    if (plan.lamp) out.push(boxCol(0.22, plan.lamp.h, 0.22, plan.lamp.x, plan.lamp.h / 2, plan.lamp.z, 0, "metal"));
+    return out;
+  }
 
-    // Main volume. baseY is the pavement top, so the box is centred half a
-    // height above it; the collider comes from the same call.
-    solid(wall, w, h, d, cxw, baseY + h / 2, czw, { surface: "concrete" });
+  // Massing: the same plan, drawn cheap. Same colliders as the detailed build
+  // because both call planColliders(); only the geometry is simpler.
+  function drawMassing(push, plan) {
+    const { lot, baseY } = plan;
+    push(MAT.pave, placed(boxGeo(plan.lw, KERB, plan.ld), plan.lx + plan.lw / 2, KERB / 2, plan.lz + plan.ld / 2));
+    if (plan.fence) {
+      const f = plan.fence;
+      const fw = f.fw;
+      push(MAT.metal, placed(boxGeo(f.x1 - f.x0, f.h, fw), (f.x0 + f.x1) / 2, baseY + f.h / 2, f.z0));
+      push(MAT.metal, placed(boxGeo(f.x1 - f.x0, f.h, fw), (f.x0 + f.x1) / 2, baseY + f.h / 2, f.z1));
+      push(MAT.metal, placed(boxGeo(fw, f.h, f.z1 - f.z0), f.x0, baseY + f.h / 2, (f.z0 + f.z1) / 2));
+      push(MAT.metal, placed(boxGeo(fw, f.h, f.z1 - f.z0), f.x1, baseY + f.h / 2, (f.z0 + f.z1) / 2));
+    }
+    for (const s of plan.stacks)
+      push(s.mats[0], placed(boxGeo(s.cw, s.h, s.cd), s.cx, baseY + s.h / 2, s.cz));
+    for (const d of plan.drums)
+      push(d.mat, placed(boxGeo(0.6, 0.9, 0.6), d.x, baseY + 0.16 + 0.45, d.z)); // box, not a 10-segment cylinder: 12 tris at 40 m
+    for (const t of plan.towers) {
+      push(t.wall, placed(boxGeo(t.w, t.h, t.d), t.x, baseY + t.h / 2, t.z));
+      push(MAT.wallC, placed(boxGeo(t.w + 0.24, t.fh * 0.9, t.d + 0.24), t.x, baseY + t.fh * 0.45, t.z));
+    }
+    for (const p of plan.props) {
+      if (p.kind === "dumpster") push(MAT.dark, placed(boxGeo(1.9, 1.35, 1.1), p.x, 0.68, p.z, p.ry));
+      else if (p.kind === "bollards") for (const s of p.spots) push(MAT.paintY, placed(boxGeo(0.36, 0.7, 0.36), s.x, 0.35, s.z));
+      else push(MAT.metal, placed(boxGeo(1.2, 1.1, 1.0), p.x, 0.55, p.z, p.ry));
+    }
+    if (plan.lamp) push(MAT.dark, placed(boxGeo(0.22, plan.lamp.h, 0.22), plan.lamp.x, plan.lamp.h / 2, plan.lamp.z));
+  }
 
-    // Ground-floor plinth: it sticks out 12 cm past the body on all sides, so
-    // it needs its own collider or the player can stand inside the wall.
-    solid(MAT.wallC, w + 0.24, fh * 0.9, d + 0.24, cxw, baseY + fh * 0.45, czw, {
-      surface: "concrete",
-    });
+  function drawFence(push, plan) {
+    const f = plan.fence;
+    const { baseY } = plan;
+    const step = 3.2;
+    for (let x = f.x0; x <= f.x1; x += step) {
+      push(MAT.metal, placed(boxGeo(0.1, f.h, 0.1), x, baseY + f.h / 2, f.z0));
+      push(MAT.metal, placed(boxGeo(0.1, f.h, 0.1), x, baseY + f.h / 2, f.z1));
+    }
+    // The corner posts are already emitted by the x loop above. Drawing them
+    // again here puts two identical boxes in the same place, which z-fights.
+    for (let z = f.z0 + step; z < f.z1 - 1e-6; z += step) {
+      push(MAT.metal, placed(boxGeo(0.1, f.h, 0.1), f.x0, baseY + f.h / 2, z));
+      push(MAT.metal, placed(boxGeo(0.1, f.h, 0.1), f.x1, baseY + f.h / 2, z));
+    }
+    push(MAT.metal, placed(boxGeo(f.x1 - f.x0, 0.08, 0.08), (f.x0 + f.x1) / 2, baseY + f.h, f.z0));
+    push(MAT.metal, placed(boxGeo(f.x1 - f.x0, 0.08, 0.08), (f.x0 + f.x1) / 2, baseY + f.h, f.z1));
+    push(MAT.metal, placed(boxGeo(0.08, 0.08, f.z1 - f.z0), f.x0, baseY + f.h, (f.z0 + f.z1) / 2));
+    push(MAT.metal, placed(boxGeo(0.08, 0.08, f.z1 - f.z0), f.x1, baseY + f.h, (f.z0 + f.z1) / 2));
+  }
 
-    // Parapet lip. These are 36 cm bands sitting on the roof edge; solid()
-    // keeps them above the collider minimum so the roof reads as enclosed.
+  function drawYard(push, plan) {
+    const { baseY } = plan;
+    // Yard slab: a 16 cm platform, low enough to step onto, so no collider.
+    push(MAT.dark, placed(boxGeo(plan.lot.w, 0.16, plan.lot.d), plan.lot.x + plan.lot.w / 2, baseY + 0.08, plan.lot.z + plan.lot.d / 2));
+    drawFence(push, plan);
+    for (const s of plan.stacks) {
+      for (let k = 0; k < s.layers; k++) {
+        const ch = 2.59;
+        push(s.mats[k], placed(boxGeo(s.cw, ch, s.cd), s.cx, baseY + 0.16 + ch / 2 + k * ch, s.cz));
+        // Corrugation ribs so the container is not a plain slab. They are 4 cm
+        // proud of the wall and belong to the container's own collider, so they
+        // are drawn only — a collider here would fight the container box.
+        for (let i2 = 0; i2 < 4; i2++)
+          push(
+            MAT.metal,
+            placed(boxGeo(s.cw * 0.9, 0.04, 0.08), s.cx, baseY + 0.16 + 0.5 + i2 * 0.55 + k * ch, s.cz + s.cd / 2 + 0.04),
+          );
+      }
+    }
+    for (const d of plan.drums) push(d.mat, placed(cylGeo(0.3, 0.9, 10), d.x, baseY + 0.16 + 0.45, d.z));
+  }
+
+  function drawProps(push, plan) {
+    for (const p of plan.props) {
+      if (p.kind === "dumpster") {
+        push(MAT.dark, placed(boxGeo(1.9, 1.35, 1.1), p.x, 0.68, p.z, p.ry));
+        push(MAT.paintY, placed(boxGeo(1.94, 0.1, 1.14), p.x, 1.38, p.z, p.ry));
+      } else if (p.kind === "bollards") {
+        for (const s of p.spots) push(MAT.paintY, placed(boxGeo(0.36, 0.7, 0.36), s.x, 0.35, s.z));
+      } else {
+        push(MAT.metal, placed(boxGeo(1.2, 1.1, 1.0), p.x, 0.55, p.z, p.ry));
+        push(MAT.wood, placed(boxGeo(1.1, 0.14, 0.9), p.x, 1.17, p.z, p.ry));
+      }
+    }
+  }
+
+  function drawLamp(push, plan) {
+    const l = plan.lamp;
+    if (!l) return;
+    push(MAT.dark, placed(boxGeo(0.22, l.h, 0.22), l.x, l.h / 2, l.z));
+    push(MAT.dark, placed(boxGeo(1.5, 0.1, 0.1), l.x + 0.75, l.h - 0.1, l.z));
+    push("__neonC", placed(boxGeo(0.7, 0.16, 0.4), l.x + 1.35, l.h - 0.25, l.z));
+  }
+
+  // Facade detail for one tower. The body and its plinth are drawn, not
+  // registered: their colliders came from planColliders() and adding a second
+  // set here is how a wall ends up with two boxes and a lip to snag on.
+  function buildTower(push, solid, r, t, baseY) {
+    const { w, d, h, floors, fh, wall, tall } = t;
+    const cxw = t.x;
+    const czw = t.z;
+    push(wall, placed(boxGeo(w, h, d), cxw, baseY + h / 2, czw));
+    // Ground-floor plinth: it sticks out 12 cm past the body on all sides.
+    push(MAT.wallC, placed(boxGeo(w + 0.24, fh * 0.9, d + 0.24), cxw, baseY + fh * 0.45, czw));
+
+    // Parapet lip. These are 36 cm bands sitting on the roof edge, above any
+    // height a player can reach, so their colliders appearing with the detail
+    // level cannot trap anyone.
     const lip = 0.36;
     const lipH = 0.7;
     const lipY = baseY + h + lipH / 2;
-    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw - d / 2, {
-      surface: "concrete",
-    });
-    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw + d / 2, {
-      surface: "concrete",
-    });
-    solid(MAT.wallB, lip, lipH, d, cxw - w / 2, lipY, czw, {
-      surface: "concrete",
-    });
-    solid(MAT.wallB, lip, lipH, d, cxw + w / 2, lipY, czw, {
-      surface: "concrete",
-    });
+    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw - d / 2, { surface: "concrete" });
+    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw + d / 2, { surface: "concrete" });
+    solid(MAT.wallB, lip, lipH, d, cxw - w / 2, lipY, czw, { surface: "concrete" });
+    solid(MAT.wallB, lip, lipH, d, cxw + w / 2, lipY, czw, { surface: "concrete" });
 
     // windows: rows of thin panes on all four faces, capped for budget
     const rows = Math.max(1, floors - 1);
@@ -524,12 +629,7 @@ export function createCity(game) {
           if (r.chance(0.35))
             push(
               MAT.wallB,
-              placed(
-                boxGeo(f.nx ? 0.06 : 1.5, 0.1, f.nx ? 1.5 : 0.06),
-                cxw + f.ox + (f.nz ? lx : 0),
-                y - 0.9,
-                czw + f.oz + (f.nx ? -lx : 0),
-              ),
+              placed(boxGeo(f.nx ? 0.06 : 1.5, 0.1, f.nx ? 1.5 : 0.06), cxw + f.ox + (f.nz ? lx : 0), y - 0.9, czw + f.oz + (f.nx ? -lx : 0)),
             );
         }
       }
@@ -537,23 +637,18 @@ export function createCity(game) {
 
     // Ground floor: roll-up door, awning, sometimes a neon sign. The door is a
     // 12 cm shutter let into the wall, so it is drawn but NOT given a collider
-    // of its own — the body box already covers it, and a thin extra box here
-    // would only produce a lip the player snags on.
+    // of its own — the body box already covers it.
     const doorFace = r.int(0, 3);
     const df = faces[doorFace];
     const dl = df.len * 0.32;
-    push(
-      MAT.dark,
-      placed(boxGeo(df.nx ? 0.12 : dl, 2.6, df.nx ? dl : 0.12), cxw + df.ox * 1.02, baseY + 1.3, czw + df.oz * 1.02),
-    );
+    push(MAT.dark, placed(boxGeo(df.nx ? 0.12 : dl, 2.6, df.nx ? dl : 0.12), cxw + df.ox * 1.02, baseY + 1.3, czw + df.oz * 1.02));
     if (r.chance(0.5)) {
-      // Awning: a real ledge you can walk under, so it gets a collider (it is
-      // 3.1 m up and would otherwise be an invisible ceiling-less shelf).
+      // Awning: a real ledge you can walk under. Its collider sits at 3.1 m,
+      // far above the 1.8 m capsule, so it can appear with the detail level
+      // without ever pushing a player around.
       const canopyW = df.nx ? 1.6 : dl + 1.2;
       const canopyD = df.nx ? dl + 1.2 : 1.6;
-      solid(MAT.metal, canopyW, 0.16, canopyD, cxw + df.ox * 1.9, baseY + 3.1, czw + df.oz * 1.9, {
-        surface: "metal",
-      });
+      solid(MAT.metal, canopyW, 0.16, canopyD, cxw + df.ox * 1.9, baseY + 3.1, czw + df.oz * 1.9, { surface: "metal" });
     }
     if (r.chance(0.42)) {
       const neon = r.chance(0.5) ? "__neonA" : r.chance(0.5) ? "__neonB" : "__neonC";
@@ -639,156 +734,56 @@ export function createCity(game) {
     }
   }
 
-  // A container yard: low, greasy, good for fighting in.
-  function buildYard(push, solid, trySolid, occ, boxes, r, lot, baseY) {
-    const fenceH = 2.2;
-    // Yard slab: a 16 cm platform, low enough to step onto, so no collider.
-    push(MAT.dark, placed(boxGeo(lot.w, 0.16, lot.d), lot.x + lot.w / 2, baseY + 0.08, lot.z + lot.d / 2));
+  // ---- one block ---------------------------------------------------------
 
-    // Perimeter fence on ALL FOUR sides. The old code only collided the south
-    // rail, which left three sides of every yard as a fence you walk through.
-    const step = 3.2;
-    const x1 = lot.x + lot.w;
-    const z1 = lot.z + lot.d;
-    for (let x = lot.x; x <= x1; x += step) {
-      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x, baseY + fenceH / 2, lot.z));
-      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x, baseY + fenceH / 2, z1));
+  function buildNear(cx, cz, detail = 2) {
+    const plan = planBlock(cx, cz);
+    const geos = new Map();
+    const gc = [];
+    const push = (bucketName, geo) => {
+      bucket(geos, bucketName).push(geo);
+      gc.push(geo);
+    };
+    const boxes = planColliders(plan);
+    const solid = (name, w, h, d, x, y, z, opts = {}) => {
+      const ry = opts.ry || 0;
+      push(name, placed(boxGeo(w, h, d), x, y, z, ry));
+      if (!opts.noCol) boxes.push(boxCol(w, h, d, x, y, z, ry, opts.surface || "concrete"));
+    };
+
+    if (detail < 2) {
+      // Old road paint is skipped here on purpose: at 40 m it is a few pixels.
+      drawMassing(push, plan);
+      return { geos, boxes, gc };
     }
-    // The corner posts are already emitted by the x loop above. Drawing them
-    // again here puts two identical boxes in the same place, which z-fights.
-    for (let z = lot.z + step; z < z1 - 1e-6; z += step) {
-      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), lot.x, baseY + fenceH / 2, z));
-      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x1, baseY + fenceH / 2, z));
+
+    // Detail decoration draws from its own stream, so adding or removing a
+    // window, a rib or a roof unit can never move a container.
+    const r = stream(cx * 13 + 5, cz * 29 - 3);
+
+    push(MAT.pave, placed(boxGeo(plan.lw, KERB, plan.ld), plan.lx + plan.lw / 2, KERB / 2, plan.lz + plan.ld / 2));
+    push(MAT.kerb, placed(boxGeo(plan.lw + 0.3, 0.06, 0.3), plan.lx + plan.lw / 2, KERB + 0.03, plan.lz + plan.ld));
+    push(MAT.kerb, placed(boxGeo(0.3, 0.06, plan.ld + 0.3), plan.lx + plan.lw, KERB + 0.03, plan.lz + plan.ld / 2));
+
+    // road paint on the west/south strips
+    for (let k = 0; k < 3; k++) {
+      const t = plan.z0 + 6 + k * 12;
+      const dash = new THREE.PlaneGeometry(0.16, 4).rotateX(-Math.PI / 2);
+      dash.translate(plan.x0 + ROAD * 0.5, 0.02, t);
+      push(MAT.paintY, dash.toNonIndexed());
     }
-    push(MAT.metal, placed(boxGeo(lot.w, 0.08, 0.08), lot.x + lot.w / 2, baseY + fenceH, lot.z));
-    push(MAT.metal, placed(boxGeo(lot.w, 0.08, 0.08), lot.x + lot.w / 2, baseY + fenceH, z1));
-    push(MAT.metal, placed(boxGeo(0.08, 0.08, lot.d), lot.x, baseY + fenceH, lot.z + lot.d / 2));
-    push(MAT.metal, placed(boxGeo(0.08, 0.08, lot.d), x1, baseY + fenceH, lot.z + lot.d / 2));
-
-    // One collider per side, not per post: fewer boxes, same wall.
-    const fw = MIN_SOLID;
-    const fh = baseY + fenceH;
-    boxes.push({
-      min: [lot.x, 0, lot.z - fw / 2],
-      max: [x1, fh, lot.z + fw / 2],
-      surface: "metal",
-    });
-    boxes.push({
-      min: [lot.x, 0, z1 - fw / 2],
-      max: [x1, fh, z1 + fw / 2],
-      surface: "metal",
-    });
-    boxes.push({
-      min: [lot.x - fw / 2, 0, lot.z],
-      max: [lot.x + fw / 2, fh, z1],
-      surface: "metal",
-    });
-    boxes.push({
-      min: [x1 - fw / 2, 0, lot.z],
-      max: [x1 + fw / 2, fh, z1],
-      surface: "metal",
-    });
-
-    const stacks = r.int(2, 4);
-    for (let i = 0; i < stacks; i++)
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const cw = r.chance(0.5) ? 6.06 : 12.19;
-        const cd = 2.44;
-        const cx = lot.x + r.range(1, Math.max(1.2, lot.w - cw - 1)) + cw / 2;
-        const cz = lot.z + r.range(2.5, Math.max(3, lot.d - cd - 1)) + cd / 2;
-        const n = r.int(1, 3);
-        const stackH = 0.16 + n * 2.59;
-        if (!occ.free(cw, stackH, cd, cx, baseY + stackH / 2, cz)) continue;
-        for (let k = 0; k < n; k++) {
-          const ch = 2.59;
-          push(
-            r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal",
-            placed(boxGeo(cw, ch, cd), cx, baseY + 0.16 + ch / 2 + k * ch, cz, r.range(-0.03, 0.03)),
-          );
-          // Corrugation ribs so the container is not a plain slab. They are 4 cm
-          // proud of the wall and belong to the container's own collider, so they
-          // are drawn only — a collider here would fight the container box.
-          for (let i2 = 0; i2 < 4; i2++)
-            push(
-              MAT.metal,
-              placed(boxGeo(cw * 0.9, 0.04, 0.08), cx, baseY + 0.16 + 0.5 + i2 * 0.55 + k * ch, cz + cd / 2 + 0.04),
-            );
-        }
-        boxes.push({
-          min: [cx - cw / 2, baseY, cz - cd / 2],
-          max: [cx + cw / 2, baseY + stackH, cz + cd / 2],
-          surface: "metal",
-        });
-        occ.claim(cw, stackH, cd, cx, baseY + stackH / 2, cz);
-        break;
-      }
-    // Drums: 90 cm tall, so they need a footprint or you walk through them.
-    // They also must not be dropped inside a container stack.
-    const drums = r.int(2, 5);
-    for (let i = 0; i < drums; i++)
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const dx = lot.x + r.range(1, lot.w - 1);
-        const dz = lot.z + r.range(1, lot.d - 1);
-        const drumTop = baseY + 0.16 + 0.9;
-        if (!occ.free(0.6, drumTop, 0.6, dx, drumTop / 2, dz)) continue;
-        // Sit the drum on top of the 16 cm yard slab, not 16 cm inside it.
-        push(r.chance(0.5) ? "paint_yellow" : "paint_green", placed(cylGeo(0.3, 0.9, 10), dx, baseY + 0.16 + 0.45, dz));
-        boxes.push({
-          min: [dx - 0.3, 0, dz - 0.3],
-          max: [dx + 0.3, drumTop, dz + 0.3],
-          surface: "metal",
-        });
-        occ.claim(0.6, drumTop, 0.6, dx, drumTop / 2, dz);
-        break;
-      }
-  }
-
-  // Street furniture. Everything here is waist height or taller, so every piece
-  // gets a collider — a dumpster you can walk through breaks the illusion as
-  // badly as a wall you can walk through.
-  function buildClutter(push, trySolid, occ, r, x, z) {
-    const k = r();
-    if (k < 0.4) {
-      const ry = r.range(-0.4, 0.4);
-      if (
-        !trySolid(MAT.dark, 1.9, 1.35, 1.1, x, 0.68, z, {
-          ry,
-          surface: "metal",
-        })
-      )
-        return false;
-      push(MAT.paintY, placed(boxGeo(1.94, 0.1, 1.14), x, 1.38, z, ry));
-    } else if (k < 0.72) {
-      const spots = [
-        { x, z },
-        { x: x + 0.7, z: z + 0.2 },
-      ];
-      if (!spots.every((s) => occ.free(0.36, 0.7, 0.36, s.x, 0.35, s.z))) return false;
-      for (const s of spots)
-        trySolid(MAT.paintY, 0.36, 0.7, 0.36, s.x, 0.35, s.z, {
-          surface: "concrete",
-        });
-    } else {
-      const ry = r.range(0, 3);
-      if (
-        !trySolid(MAT.metal, 1.2, 1.1, 1.0, x, 0.55, z, {
-          ry,
-          surface: "metal",
-        })
-      )
-        return false;
-      push(MAT.wood, placed(boxGeo(1.1, 0.14, 0.9), x, 1.17, z, ry));
+    for (let k = 0; k < 3; k++) {
+      const dash = new THREE.PlaneGeometry(4, 0.16).rotateX(-Math.PI / 2);
+      dash.translate(plan.x0 + 20 + k * 6, 0.02, plan.z0 + ROAD * 0.5);
+      push(MAT.paintY, dash.toNonIndexed());
     }
-    return true;
-  }
 
-  function buildLamp(push, trySolid, r, x, z) {
-    const h = r.range(7, 11);
-    // The mast is an 11 cm cylinder: solid() gives it a 30 cm collider so you
-    // cannot walk through the pole.
-    if (!trySolid(MAT.dark, 0.22, h, 0.22, x, h / 2, z, { surface: "metal" })) return;
-    push(MAT.dark, placed(boxGeo(1.5, 0.1, 0.1), x + 0.75, h - 0.1, z));
-    push("__neonC", placed(boxGeo(0.7, 0.16, 0.4), x + 1.35, h - 0.25, z));
+    if (plan.type === "yard") drawYard(push, plan);
+    else for (const t of plan.towers) buildTower(push, solid, r, t, plan.baseY);
+    drawProps(push, plan);
+    drawLamp(push, plan);
+
+    return { geos, boxes, gc };
   }
 
   // ---- silhouettes out to the horizon ------------------------------------
