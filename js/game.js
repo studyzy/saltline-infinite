@@ -36372,8 +36372,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           let Fe = Pe[Re.dataset.a];
           if (!Fe) return;
           let we = Re.querySelector("span");
-          we && (we.textContent = t(Fe[0])),
-            Re.setAttribute("aria-label", t(Fe[1]));
+          // tr(), not t(): in this scope t is the HUD root element, and
+          // calling t("tbtn_fire") on it threw inside relabel(), which aborted
+          // the rest of the relabel pass.
+          we && (we.textContent = tr(Fe[0])),
+            Re.setAttribute("aria-label", tr(Fe[1]));
         });
       },
       update: se,
@@ -38017,6 +38020,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       };
     (u.err = {}),
       t.renderer.setAnimationLoop(() => {
+        // The whole frame is wrapped: setAnimationLoop stops rescheduling the
+        // moment its callback throws, and a stopped loop looks exactly like
+        // "the player cannot move" with a frozen picture. One bad subsystem
+        // must never take the game down, so the frame is isolated and the
+        // first failure of each stage is reported once.
+        try {
         let h = performance.now(),
           f = (h - l) / 1e3;
         (l = h), (a = a ? a * 0.95 + f * 0.05 : f);
@@ -38078,8 +38087,26 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           u("level", p),
           u("backdrop", p),
           u("mats", p)),
+          // The city is generated content and can throw (a bad block, a
+          // material that fails to compile on some driver). An uncaught throw
+          // here kills the requestAnimationFrame chain for good, which reads as
+          // "the player cannot move" — so it must never escape this frame.
           t.city &&
-            t.city.update(p, t.player && t.player.pos ? t.player.pos : t.camera.position),
+            (() => {
+              try {
+                t.city.update(
+                  p,
+                  t.player && t.player.pos ? t.player.pos : t.camera.position,
+                );
+              } catch (err) {
+                window.__cityError ||
+                  ((window.__cityError = String((err && err.stack) || err)),
+                  console.error("[loop] city.update threw: " + window.__cityError));
+                t.cityDisabled ||
+                  ((t.cityDisabled = !0),
+                  t.city.setEnabled && t.city.setEnabled(!1));
+              }
+            })(),
           u("audio", p),
           u("hud", p),
           s && (t.camera.position.copy(s.pos), t.camera.lookAt(s.look)),
@@ -38093,8 +38120,28 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
               "[loop] render.frame threw: " + ((v && v.stack) || v),
             ));
         }
-        t.input.endFrame && t.input.endFrame(),
-          window.__frames++,
+        // endFrame() clears per-frame input state. If it ever throws, the
+        // exception escapes the animation-loop callback and Three.js never
+        // re-schedules it: the whole game freezes on one frame, which the
+        // player experiences as "I cannot move any more". Never let that
+        // happen — the loop must survive any single subsystem failing.
+        try {
+          t.input.endFrame && t.input.endFrame();
+        } catch (v) {
+          u.err.endFrame ||
+            ((u.err.endFrame = 1),
+            console.error(
+              "[loop] input.endFrame threw: " + ((v && v.stack) || v),
+            ));
+        }
+        } catch (e) {
+          window.__loopError ||
+            ((window.__loopError = String((e && e.stack) || e)),
+            console.error("[loop] frame threw: " + window.__loopError));
+        }
+        // Outside the try: the frame counter must advance even after a failure,
+        // otherwise the game looks hung to anything watching it.
+        window.__frames++,
           window.__frames === 2 && (window.__ready = !0);
       });
   }

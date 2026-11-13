@@ -1021,7 +1021,7 @@ export function createCity(game) {
       return !!lastCell && !inPort(lastCell.x, lastCell.z);
     },
     update(dt, playerPos) {
-      if (!playerPos) return;
+      if (!playerPos || !Number.isFinite(playerPos.x) || !Number.isFinite(playerPos.z)) return;
       lastCell = { x: playerPos.x, z: playerPos.z };
       const cx = Math.round(playerPos.x / CELL);
       const cz = Math.round(playerPos.z / CELL);
