@@ -1149,6 +1149,39 @@ body {
   max-width: 52ch;
 }
 
+/* Build stamp: small, quiet, but always on the title screen so you can tell at
+   a glance whether the page you loaded is the deploy you just made. */
+.m-ver {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 10px;
+  font: 500 10px/1 var(--f-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--steel);
+  opacity: 0.85;
+}
+.m-ver-k {
+  color: rgba(232, 228, 218, 0.45);
+}
+/* Chinese has no word space; keep a small gap so the label and hash read apart */
+.m-ver-k::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+}
+.m-ver code {
+  font: 600 11px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--signal);
+  background: rgba(11, 13, 15, 0.4);
+  border: 1px solid rgba(255, 179, 71, 0.3);
+  padding: 3px 6px;
+  text-transform: none;
+  cursor: help;
+}
+
 .btn {
   font: 600 15px/1 var(--f-label);
   letter-spacing: 0.22em;

@@ -36658,6 +36658,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           <button class="btn m-only-narrow" data-act="controls" data-i18n="title_controls"></button>
         </div>
         <p class="m-note" data-i18n="title_note"></p>
+        <p class="m-ver" data-f="build"><span class="m-ver-k" data-i18n="title_build"></span><code data-f="build-id">—</code></p>
       </div>
       <aside class="m-legend" data-i18n-aria="legend_aria">
         <div><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <i data-i18n="legend_move"></i></span><span><kbd>Mouse</kbd> <i data-i18n="legend_look"></i></span><span><kbd>LMB</kbd> <i data-i18n="legend_fire"></i></span><span><kbd>RMB</kbd> <i data-i18n="legend_aim"></i></span><span><kbd>R</kbd> <i data-i18n="legend_reload"></i></span></div>
@@ -36989,7 +36990,30 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         relabel: R,
       };
     R();
+    loadBuild();
     return g(), q;
+  }
+
+  // Show which build this is on the title screen. version.json is written at
+  // deploy time from the git commit, so a stale page is obvious at a glance
+  // (and the deploy route serves it no-cache, so it always revalidates).
+  function loadBuild() {
+    const slot = document.querySelector('[data-f="build-id"]');
+    if (!slot) return;
+    fetch("version.json", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => {
+        if (!v) throw new Error("no version.json");
+        const id = v.short || String(v.commit || "").slice(0, 7) || "unknown";
+        slot.textContent = id;
+        slot.title = [v.commit, v.subject, v.built].filter(Boolean).join("\n");
+        slot.dataset.build = id;
+      })
+      .catch(() => {
+        // Local dev without a deploy: say so instead of showing a fake hash.
+        slot.textContent = "dev";
+        slot.dataset.build = "dev";
+      });
   }
   var Yi = {
       introSeconds: 3.5,

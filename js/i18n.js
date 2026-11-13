@@ -28,6 +28,7 @@ const S = {
     title_deploy: "Deploy",
     title_settings: "Settings",
     title_controls: "Controls",
+    title_build: "Build",
     title_note:
       "Every surface, machine and sound is generated in your browser. Nothing is downloaded.",
     legend_move: "Move",
@@ -206,6 +207,7 @@ const S = {
     title_deploy: "出击",
     title_settings: "设置",
     title_controls: "操作",
+    title_build: "版本",
     title_note: "每一块表面、每一台机械、每一段声音都在你的浏览器里现场生成，没有下载任何素材。",
     legend_move: "移动",
     legend_look: "视角",
