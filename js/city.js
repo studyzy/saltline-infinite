@@ -488,6 +488,8 @@ export function createCity(game) {
     const { lot, baseY } = plan;
     push(MAT.pave, placed(boxGeo(plan.lw, KERB, plan.ld), plan.lx + plan.lw / 2, KERB / 2, plan.lz + plan.ld / 2));
     if (plan.fence) {
+      // Yard floor: the 16 cm slab the containers stand on.
+      push(MAT.dark, placed(boxGeo(plan.lot.w, 0.16, plan.lot.d), plan.lot.x + plan.lot.w / 2, baseY + 0.08, plan.lot.z + plan.lot.d / 2));
       const f = plan.fence;
       const fw = f.fw;
       push(MAT.metal, placed(boxGeo(f.x1 - f.x0, f.h, fw), (f.x0 + f.x1) / 2, baseY + f.h / 2, f.z0));
@@ -496,7 +498,10 @@ export function createCity(game) {
       push(MAT.metal, placed(boxGeo(fw, f.h, f.z1 - f.z0), f.x1, baseY + f.h / 2, (f.z0 + f.z1) / 2));
     }
     for (const s of plan.stacks)
-      push(s.mats[0], placed(boxGeo(s.cw, s.h, s.cd), s.cx, baseY + s.h / 2, s.cz));
+      // s.h includes the 16 cm it stands on, so the drawn box starts at the
+      // slab top: at baseY it was sunk into the yard slab and read as a
+      // container clipping through the ground.
+      push(s.mats[0], placed(boxGeo(s.cw, s.h - 0.16, s.cd), s.cx, baseY + 0.16 + (s.h - 0.16) / 2, s.cz));
     for (const d of plan.drums)
       push(d.mat, placed(boxGeo(0.6, 0.9, 0.6), d.x, baseY + 0.16 + 0.45, d.z)); // box, not a 10-segment cylinder: 12 tris at 40 m
     for (const t of plan.towers) {
@@ -638,23 +643,39 @@ export function createCity(game) {
     // Ground floor: roll-up door, awning, sometimes a neon sign. The door is a
     // 12 cm shutter let into the wall, so it is drawn but NOT given a collider
     // of its own — the body box already covers it.
+    //
+    // df.ox / df.oz already point AT the wall face, so everything here steps
+    // out from that point along the face normal. Multiplying the face offset a
+    // second time (the old df.ox * 1.9 / * 1.35) parked the awning and the
+    // neon 2-4 m off the facade, hanging in mid-air over the street.
     const doorFace = r.int(0, 3);
     const df = faces[doorFace];
     const dl = df.len * 0.32;
-    push(MAT.dark, placed(boxGeo(df.nx ? 0.12 : dl, 2.6, df.nx ? dl : 0.12), cxw + df.ox * 1.02, baseY + 1.3, czw + df.oz * 1.02));
-    if (r.chance(0.5)) {
-      // Awning: a real ledge you can walk under. Its collider sits at 3.1 m,
-      // far above the 1.8 m capsule, so it can appear with the detail level
-      // without ever pushing a player around.
-      const canopyW = df.nx ? 1.6 : dl + 1.2;
-      const canopyD = df.nx ? dl + 1.2 : 1.6;
-      solid(MAT.metal, canopyW, 0.16, canopyD, cxw + df.ox * 1.9, baseY + 3.1, czw + df.oz * 1.9, { surface: "metal" });
+    const nX = df.nx;
+    const nZ = df.nz;
+    const fx = cxw + df.ox; // a point on the wall face
+    const fz = czw + df.oz;
+    push(MAT.dark, placed(boxGeo(nX ? 0.12 : dl, 2.6, nX ? dl : 0.12), fx, baseY + 1.3, fz));
+    // Both of these hang off the wall, so they are clamped to the building:
+    // on a one-storey block a fixed 3.1 m awning or 4.4 m sign sits above the
+    // roofline and floats in the air on its own.
+    const wantsAwning = r.chance(0.5);
+    if (wantsAwning && h > 3.4) {
+      // Awning: a real ledge you can walk under. Half its 1.6 m depth out from
+      // the face, so its inner edge sits on the wall instead of in the air.
+      // Its collider sits at 3.1 m, far above the 1.8 m capsule, so it can
+      // appear with the detail level without pushing a player around.
+      const canopyW = nX ? 1.6 : dl + 1.2;
+      const canopyD = nX ? dl + 1.2 : 1.6;
+      solid(MAT.metal, canopyW, 0.16, canopyD, fx + nX * 0.8, baseY + 3.1, fz + nZ * 0.8, { surface: "metal" });
     }
-    if (r.chance(0.42)) {
+    const wantsSign = r.chance(0.42);
+    if (wantsSign && h > 3.6) {
       const neon = r.chance(0.5) ? "__neonA" : r.chance(0.5) ? "__neonB" : "__neonC";
-      const nw = df.nx ? 0.14 : Math.min(dl * 1.1, 5);
-      const nd = df.nx ? Math.min(dl * 1.1, 5) : 0.14;
-      push(neon, placed(boxGeo(nw, 0.5, nd), cxw + df.ox * 1.35, baseY + 4.4, czw + df.oz * 1.35));
+      const nw = nX ? 0.14 : Math.min(dl * 1.1, 5);
+      const nd = nX ? Math.min(dl * 1.1, 5) : 0.14;
+      const signY = baseY + Math.min(4.4, h - 0.6);
+      push(neon, placed(boxGeo(nw, 0.5, nd), fx + nX * 0.09, signY, fz + nZ * 0.09));
     }
 
     // a run of service pipes up one corner
@@ -723,9 +744,13 @@ export function createCity(game) {
     }
     if (r.chance(0.4)) {
       const spot = roofSpot(0.6, 0.6);
+      // Mast height is random, so it is laid out from the roof up. Centring it
+      // on a fixed point above the roof left the whole mast — and the arm on
+      // top of it — hanging in the air.
+      const mastH = r.range(3, 7);
       if (spot) {
-        push(MAT.dark, placed(boxGeo(0.07, r.range(3, 7), 0.07), spot.x, roofY + 2.4, spot.z));
-        push(MAT.dark, placed(boxGeo(0.5, 0.05, 0.05), spot.x, roofY + 4.4, spot.z));
+        push(MAT.dark, placed(boxGeo(0.07, mastH, 0.07), spot.x, roofY + mastH / 2, spot.z));
+        push(MAT.dark, placed(boxGeo(0.5, 0.05, 0.05), spot.x, roofY + mastH - 0.1, spot.z));
       }
     }
     if (r.chance(0.5)) {

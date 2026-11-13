@@ -37011,12 +37011,39 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         slot.textContent = id;
         slot.title = [v.commit, v.subject, v.built].filter(Boolean).join("\n");
         slot.dataset.build = id;
+        watchBuild(id);
       })
       .catch(() => {
         // Local dev without a deploy: say so instead of showing a fake hash.
         slot.textContent = "dev";
         slot.dataset.build = "dev";
       });
+  }
+
+  // A tab left open keeps the old bundle in memory and the game never reloads
+  // itself, so a player can end up judging a build that was replaced hours
+  // ago. Poll the stamp and offer a reload instead of letting that happen.
+  function watchBuild(loaded) {
+    if (loaded === "dev") return;
+    setInterval(() => {
+      fetch("version.json", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((v) => {
+          const id = v && (v.short || String(v.commit || "").slice(0, 7));
+          if (!id || id === loaded || document.querySelector(".build-stale")) return;
+          const el = document.createElement("button");
+          el.className = "build-stale";
+          el.textContent = "新版本 " + id + " 已部署 — 点击刷新";
+          el.style.cssText =
+            "position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:9999;" +
+            "padding:8px 14px;border:0;border-radius:6px;cursor:pointer;" +
+            "font:600 13px/1 ui-monospace,monospace;letter-spacing:.02em;" +
+            "background:#e8b23a;color:#16181c;box-shadow:0 4px 18px rgba(0,0,0,.45)";
+          el.onclick = () => location.reload();
+          document.body.appendChild(el);
+        })
+        .catch(() => {});
+    }, 45e3);
   }
   var Yi = {
       introSeconds: 3.5,
