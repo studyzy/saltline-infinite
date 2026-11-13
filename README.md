@@ -20,6 +20,8 @@ All credit for the game goes to its original author. This repo is a mirror so pe
 
 Nothing in the game code. The claude.ai frame-runtime scripts were removed from `<head>`, and a doctype, charset and viewport tag were added so the file runs as a plain web page.
 
+The original single `index.html` was split into `index.html` (markup shell), `css/game.css` (styles) and `js/game.js` (the game code). The inlined three.js r180 build was removed from the bundle and replaced with the official `three@0.180.0` ES modules (`js/vendor/`). Game logic is unchanged; it now runs as an ES module and references the 89 three.js exports it actually uses (plus the namespace object) through a short alias table at the top of `js/game.js`.
+
 ## Run it
 
 ```sh
@@ -28,4 +30,12 @@ python3 -m http.server 8731
 
 Then open http://localhost:8731 and click the page to capture the mouse and start the sound.
 
-The whole game is one file, `index.html` (~1.4 MB). It bundles three.js and loads fonts from Google Fonts. There are no other outside assets.
+Files:
+
+- `index.html` — markup shell (~1 KB)
+- `css/game.css` — all styles (~30 KB)
+- `js/game.js` — game code as an ES module, with a minified-name → three.js alias table (~1.2 MB)
+- `js/vendor/three.module.js`, `js/vendor/three.core.js` — official three.js r180 build (unminified)
+- `js/vendor/THREE-LICENSE.txt` — three.js MIT licence
+
+Fonts load from Google Fonts. There are no other outside assets.
