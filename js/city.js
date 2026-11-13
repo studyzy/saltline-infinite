@@ -68,6 +68,10 @@ function stream(cx, cz) {
 
 // -------------------------------------------------------------- geometry ---
 
+// Minimum collider thickness. A collider thinner than this can be tunnelled
+// through by the capsule sweep at sprint speed, and reads as a paper wall.
+const MIN_SOLID = 0.3;
+
 // Box with UVs in metres per face, matching the game's material tiling.
 function boxGeo(w, h, d) {
   const g = new THREE.BoxGeometry(w, h, d);
@@ -217,6 +221,38 @@ export function createCity(game) {
       gc.push(geo);
     };
 
+    // Emit one solid volume: the visible box and its collider are derived from
+    // the same numbers, so nothing can be drawn without also being solid.
+    // Colliders are inflated to MIN_SOLID on every axis (a zero-thickness pane
+    // or a 6 cm pipe is otherwise walked straight through).
+    const solid = (name, w, h, d, x, y, z, opts = {}) => {
+      const ry = opts.ry || 0;
+      push(name, placed(boxGeo(w, h, d), x, y, z, ry));
+      const cw = Math.max(w, MIN_SOLID);
+      const ch = Math.max(h, MIN_SOLID);
+      const cd = Math.max(d, MIN_SOLID);
+      if (opts.noCol) return;
+      // Rotated boxes get their collider widened to the swept footprint so the
+      // player can never clip a corner.
+      if (Math.abs(ry) > 1e-3) {
+        const c = Math.abs(Math.cos(ry));
+        const sn = Math.abs(Math.sin(ry));
+        const sw = cw * c + cd * sn;
+        const sd = cw * sn + cd * c;
+        boxes.push({
+          min: [x - sw / 2, y - ch / 2, z - sd / 2],
+          max: [x + sw / 2, y + ch / 2, z + sd / 2],
+          surface: opts.surface || "concrete",
+        });
+        return;
+      }
+      boxes.push({
+        min: [x - cw / 2, y - ch / 2, z - cd / 2],
+        max: [x + cw / 2, y + ch / 2, z + cd / 2],
+        surface: opts.surface || "concrete",
+      });
+    };
+
     const x0 = cx * CELL;
     const z0 = cz * CELL;
 
@@ -248,7 +284,7 @@ export function createCity(game) {
     const kind = r();
     if (kind < 0.22) {
       // low yard: container stacks, fenced compound
-      buildYard(push, boxes, r, lot, baseY);
+      buildYard(push, solid, boxes, r, lot, baseY);
     } else {
       const cols = kind < 0.6 ? 1 : 2;
       const rows = r() < 0.5 ? 1 : 2;
@@ -260,7 +296,7 @@ export function createCity(game) {
           const pad = 1.2 + r() * 1.6;
           buildTower(
             push,
-            boxes,
+            solid,
             r,
             {
               x: lot.x + i * cw + pad * 0.5,
@@ -280,15 +316,15 @@ export function createCity(game) {
     for (let i = 0; i < clutter; i++) {
       const px = x0 + ROAD - 1.1 + r.range(-0.5, 0.5);
       const pz = z0 + r.range(6, CELL - 4);
-      buildClutter(push, r, px, pz);
+      buildClutter(push, solid, boxes, r, px, pz);
     }
     // one light mast per block, on the pavement corner
-    buildLamp(push, r, x0 + ROAD + 0.6, z0 + ROAD + 0.6);
+    buildLamp(push, solid, r, x0 + ROAD + 0.6, z0 + ROAD + 0.6);
 
     return { geos, boxes, gc };
   }
 
-  function buildTower(push, boxes, r, lot, baseY, cx, cz) {
+  function buildTower(push, solid, r, lot, baseY, cx, cz) {
     if (lot.w < 3 || lot.d < 3) return;
     const w = Math.min(lot.w, 26);
     const d = Math.min(lot.d, 26);
@@ -301,37 +337,25 @@ export function createCity(game) {
     const wall = r.pick([MAT.wallA, MAT.wallB, MAT.wallC, MAT.wallA, MAT.wallB]);
     const style = r();
 
-    // main volume, sometimes with a setback upper stage
-    const body = boxGeo(w, h, d);
-    push(wall, placed(body, cxw, baseY + h / 2, czw));
-    boxes.push({
-      min: [cxw - w / 2, baseY, czw - d / 2],
-      max: [cxw + w / 2, baseY + h, czw + d / 2],
+    // Main volume. baseY is the pavement top, so the box is centred half a
+    // height above it; the collider comes from the same call.
+    solid(wall, w, h, d, cxw, baseY + h / 2, czw, { surface: "concrete" });
+
+    // Ground-floor plinth: it sticks out 12 cm past the body on all sides, so
+    // it needs its own collider or the player can stand inside the wall.
+    solid(MAT.wallC, w + 0.24, fh * 0.9, d + 0.24, cxw, baseY + fh * 0.45, czw, {
       surface: "concrete",
     });
 
-    // plinth / ground floor band
-    push(MAT.wallC, placed(boxGeo(w + 0.24, fh * 0.9, d + 0.24), cxw, baseY + fh * 0.45, czw));
-
-    // parapet lip
+    // Parapet lip. These are 36 cm bands sitting on the roof edge; solid()
+    // keeps them above the collider minimum so the roof reads as enclosed.
     const lip = 0.36;
     const lipH = 0.7;
-    push(
-      MAT.wallB,
-      placed(boxGeo(w + lip, lipH, lip), cxw, baseY + h + lipH / 2, czw - d / 2),
-    );
-    push(
-      MAT.wallB,
-      placed(boxGeo(w + lip, lipH, lip), cxw, baseY + h + lipH / 2, czw + d / 2),
-    );
-    push(
-      MAT.wallB,
-      placed(boxGeo(lip, lipH, d), cxw - w / 2, baseY + h + lipH / 2, czw),
-    );
-    push(
-      MAT.wallB,
-      placed(boxGeo(lip, lipH, d), cxw + w / 2, baseY + h + lipH / 2, czw),
-    );
+    const lipY = baseY + h + lipH / 2;
+    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw - d / 2, { surface: "concrete" });
+    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw + d / 2, { surface: "concrete" });
+    solid(MAT.wallB, lip, lipH, d, cxw - w / 2, lipY, czw, { surface: "concrete" });
+    solid(MAT.wallB, lip, lipH, d, cxw + w / 2, lipY, czw, { surface: "concrete" });
 
     // windows: rows of thin panes on all four faces, capped for budget
     const rows = Math.max(1, floors - 1);
@@ -382,7 +406,10 @@ export function createCity(game) {
       }
     }
 
-    // ground floor: loading door, awning, sometimes neon
+    // Ground floor: roll-up door, awning, sometimes a neon sign. The door is a
+    // 12 cm shutter let into the wall, so it is drawn but NOT given a collider
+    // of its own — the body box already covers it, and a thin extra box here
+    // would only produce a lip the player snags on.
     const doorFace = r.int(0, 3);
     const df = faces[doorFace];
     const dl = df.len * 0.32;
@@ -396,32 +423,19 @@ export function createCity(game) {
       ),
     );
     if (r.chance(0.5)) {
+      // Awning: a real ledge you can walk under, so it gets a collider (it is
+      // 3.1 m up and would otherwise be an invisible ceiling-less shelf).
       const canopyW = df.nx ? 1.6 : dl + 1.2;
       const canopyD = df.nx ? dl + 1.2 : 1.6;
-      push(
-        MAT.metal,
-        placed(
-          boxGeo(canopyW, 0.09, canopyD),
-          cxw + df.ox * 1.9,
-          baseY + 3.1,
-          czw + df.oz * 1.9,
-          df.nx ? Math.PI / 2 : 0,
-        ),
-      );
+      solid(MAT.metal, canopyW, 0.16, canopyD, cxw + df.ox * 1.9, baseY + 3.1, czw + df.oz * 1.9, {
+        surface: "metal",
+      });
     }
     if (r.chance(0.42)) {
       const neon = r.chance(0.5) ? "__neonA" : r.chance(0.5) ? "__neonB" : "__neonC";
       const nw = df.nx ? 0.14 : Math.min(dl * 1.1, 5);
       const nd = df.nx ? Math.min(dl * 1.1, 5) : 0.14;
-      push(
-        neon,
-        placed(
-          boxGeo(nw, 0.5, nd),
-          cxw + df.ox * 1.35,
-          baseY + 4.4,
-          czw + df.oz * 1.35,
-        ),
-      );
+      push(neon, placed(boxGeo(nw, 0.5, nd), cxw + df.ox * 1.35, baseY + 4.4, czw + df.oz * 1.35));
     }
 
     // a run of service pipes up one corner
@@ -482,19 +496,36 @@ export function createCity(game) {
   }
 
   // A container yard: low, greasy, good for fighting in.
-  function buildYard(push, boxes, r, lot, baseY) {
+  function buildYard(push, solid, boxes, r, lot, baseY) {
     const fenceH = 2.2;
+    // Yard slab: a 16 cm platform, low enough to step onto, so no collider.
     push(MAT.dark, placed(boxGeo(lot.w, 0.16, lot.d), lot.x + lot.w / 2, baseY + 0.08, lot.z + lot.d / 2));
-    // perimeter fence posts + rail
+
+    // Perimeter fence on ALL FOUR sides. The old code only collided the south
+    // rail, which left three sides of every yard as a fence you walk through.
     const step = 3.2;
-    for (let x = lot.x; x <= lot.x + lot.w; x += step)
+    const x1 = lot.x + lot.w;
+    const z1 = lot.z + lot.d;
+    for (let x = lot.x; x <= x1; x += step) {
       push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x, baseY + fenceH / 2, lot.z));
+      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x, baseY + fenceH / 2, z1));
+    }
+    for (let z = lot.z; z <= z1; z += step) {
+      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), lot.x, baseY + fenceH / 2, z));
+      push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x1, baseY + fenceH / 2, z));
+    }
     push(MAT.metal, placed(boxGeo(lot.w, 0.08, 0.08), lot.x + lot.w / 2, baseY + fenceH, lot.z));
-    boxes.push({
-      min: [lot.x, baseY, lot.z - 0.15],
-      max: [lot.x + lot.w, baseY + fenceH, lot.z + 0.15],
-      surface: "metal",
-    });
+    push(MAT.metal, placed(boxGeo(lot.w, 0.08, 0.08), lot.x + lot.w / 2, baseY + fenceH, z1));
+    push(MAT.metal, placed(boxGeo(0.08, 0.08, lot.d), lot.x, baseY + fenceH, lot.z + lot.d / 2));
+    push(MAT.metal, placed(boxGeo(0.08, 0.08, lot.d), x1, baseY + fenceH, lot.z + lot.d / 2));
+
+    // One collider per side, not per post: fewer boxes, same wall.
+    const fw = MIN_SOLID;
+    const fh = baseY + fenceH;
+    boxes.push({ min: [lot.x, 0, lot.z - fw / 2], max: [x1, fh, lot.z + fw / 2], surface: "metal" });
+    boxes.push({ min: [lot.x, 0, z1 - fw / 2], max: [x1, fh, z1 + fw / 2], surface: "metal" });
+    boxes.push({ min: [lot.x - fw / 2, 0, lot.z], max: [lot.x + fw / 2, fh, z1], surface: "metal" });
+    boxes.push({ min: [x1 - fw / 2, 0, lot.z], max: [x1 + fw / 2, fh, z1], surface: "metal" });
 
     const stacks = r.int(2, 4);
     for (let i = 0; i < stacks; i++) {
@@ -515,15 +546,17 @@ export function createCity(game) {
             r.range(-0.03, 0.03),
           ),
         );
-        // corrugation ribs so the container is not a plain slab
+        // Corrugation ribs so the container is not a plain slab. They are 4 cm
+        // proud of the wall and belong to the container's own collider, so they
+        // are drawn only — a collider here would fight the container box.
         for (let i2 = 0; i2 < 4; i2++)
           push(
             MAT.metal,
             placed(
-              boxGeo(cw * 0.9, 0.04, 0.02),
+              boxGeo(cw * 0.9, 0.04, 0.08),
               cx,
               baseY + 0.16 + 0.5 + i2 * 0.55 + k * ch,
-              cz + cd / 2 + 0.02,
+              cz + cd / 2 + 0.04,
             ),
           );
       }
@@ -533,39 +566,46 @@ export function createCity(game) {
         surface: "metal",
       });
     }
-    // a couple of drums and a skip
-    for (let i = 0; i < r.int(2, 5); i++)
-      push(
-        r.chance(0.5) ? "paint_yellow" : "paint_green",
-        placed(
-          cylGeo(0.3, 0.9, 10),
-          lot.x + r.range(1, lot.w - 1),
-          baseY + 0.45,
-          lot.z + r.range(1, lot.d - 1),
-        ),
-      );
-  }
-
-  function buildClutter(push, r, x, z) {
-    const k = r();
-    if (k < 0.4) {
-      push(MAT.dark, placed(boxGeo(1.9, 1.35, 1.1), x, 0.68, z, r.range(-0.4, 0.4)));
-      push(MAT.paintY, placed(boxGeo(1.94, 0.1, 1.14), x, 1.38, z, r.range(-0.4, 0.4)));
-    } else if (k < 0.72) {
-      for (let i = 0; i < 2; i++)
-        push(
-          MAT.paintY,
-          placed(boxGeo(0.36, 0.7, 0.36), x + i * 0.7, 0.35, z + i * 0.2),
-        );
-    } else {
-      push(MAT.metal, placed(boxGeo(1.2, 1.1, 1.0), x, 0.55, z, r.range(0, 3)));
-      push(MAT.wood, placed(boxGeo(1.1, 0.14, 0.9), x, 1.17, z, r.range(0, 3)));
+    // Drums: 90 cm tall, so they need a footprint or you walk through them.
+    for (let i = 0; i < r.int(2, 5); i++) {
+      const dx = lot.x + r.range(1, lot.w - 1);
+      const dz = lot.z + r.range(1, lot.d - 1);
+      push(r.chance(0.5) ? "paint_yellow" : "paint_green", placed(cylGeo(0.3, 0.9, 10), dx, baseY + 0.45, dz));
+      boxes.push({
+        min: [dx - 0.3, 0, dz - 0.3],
+        max: [dx + 0.3, baseY + 0.9, dz + 0.3],
+        surface: "metal",
+      });
     }
   }
 
-  function buildLamp(push, r, x, z) {
+  // Street furniture. Everything here is waist height or taller, so every piece
+  // gets a collider — a dumpster you can walk through breaks the illusion as
+  // badly as a wall you can walk through.
+  function buildClutter(push, solid, boxes, r, x, z) {
+    const k = r();
+    if (k < 0.4) {
+      const ry = r.range(-0.4, 0.4);
+      solid(MAT.dark, 1.9, 1.35, 1.1, x, 0.68, z, { ry, surface: "metal" });
+      push(MAT.paintY, placed(boxGeo(1.94, 0.1, 1.14), x, 1.38, z, ry));
+    } else if (k < 0.72) {
+      for (let i = 0; i < 2; i++) {
+        const cx2 = x + i * 0.7;
+        const cz2 = z + i * 0.2;
+        solid(MAT.paintY, 0.36, 0.7, 0.36, cx2, 0.35, cz2, { surface: "concrete" });
+      }
+    } else {
+      const ry = r.range(0, 3);
+      solid(MAT.metal, 1.2, 1.1, 1.0, x, 0.55, z, { ry, surface: "metal" });
+      push(MAT.wood, placed(boxGeo(1.1, 0.14, 0.9), x, 1.17, z, ry));
+    }
+  }
+
+  function buildLamp(push, solid, r, x, z) {
     const h = r.range(7, 11);
-    push(MAT.dark, placed(cylGeo(0.11, h, 8), x, h / 2, z));
+    // The mast is an 11 cm cylinder: solid() gives it a 30 cm collider so you
+    // cannot walk through the pole.
+    solid(MAT.dark, 0.22, h, 0.22, x, h / 2, z, { surface: "metal" });
     push(MAT.dark, placed(boxGeo(1.5, 0.1, 0.1), x + 0.75, h - 0.1, z));
     push("__neonC", placed(boxGeo(0.7, 0.16, 0.4), x + 1.35, h - 0.25, z));
   }
@@ -815,7 +855,16 @@ export function createCity(game) {
     // The horizon batch is expensive to re-merge and upload; it only needs to
     // change when the player has actually travelled, and never more than about
     // once a second. A stale silhouette 300 m out is invisible.
-    if (farDirty && performance.now() - lastFarBuild > 1100) {
+    //
+    // It used to run unconditionally here and cost ~80 ms in one go, which is a
+    // visible hitch every time the player crossed a cell line. It now runs only
+    // if the near-field queue finished and this frame still has budget left.
+    if (
+      farDirty &&
+      pending.length === 0 &&
+      performance.now() - lastFarBuild > 1100 &&
+      performance.now() - t0 < BUDGET_MS * 0.5
+    ) {
       lastFarBuild = performance.now();
       rebuildFarBatch();
     }
