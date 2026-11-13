@@ -227,6 +227,49 @@ export function createCity(game) {
       gc.push(geo);
     };
 
+    // Freestanding props used to be placed at independent random coordinates
+    // with no overlap test, so a drum could land inside a container, two
+    // containers could merge into one slab and a bollard could sit inside a
+    // dumpster. Every solid volume claims its footprint here; random props
+    // must find a free spot before they are drawn. Structural parts (plinth,
+    // parapet, awning, roof kit) deliberately overlap the volume they belong
+    // to, so they only claim, they never reject.
+    const occupied = [];
+    const GAP = 0.16; // clearance between separate props
+    const EPS = 0.001; // faces that merely touch are not an overlap
+    const footprint = (w, d, x, z, ry) => {
+      const c = Math.abs(Math.cos(ry));
+      const s = Math.abs(Math.sin(ry));
+      const hw = (w * c + d * s) / 2 + GAP;
+      const hd = (w * s + d * c) / 2 + GAP;
+      return { minX: x - hw, maxX: x + hw, minZ: z - hd, maxZ: z + hd };
+    };
+    const occ = {
+      free(w, h, d, x, y, z, ry = 0) {
+        const f = footprint(w, d, x, z, ry);
+        const y0 = y - h / 2;
+        const y1 = y + h / 2;
+        for (const o of occupied)
+          if (
+            f.minX < o.maxX &&
+            f.maxX > o.minX &&
+            f.minZ < o.maxZ &&
+            f.maxZ > o.minZ &&
+            y0 < o.maxY - EPS &&
+            y1 > o.minY + EPS
+          )
+            return false;
+        return true;
+      },
+      claim(w, h, d, x, y, z, ry = 0) {
+        occupied.push({
+          ...footprint(w, d, x, z, ry),
+          minY: y - h / 2,
+          maxY: y + h / 2,
+        });
+      },
+    };
+
     // Emit one solid volume: the visible box and its collider are derived from
     // the same numbers, so nothing can be drawn without also being solid.
     // Colliders are inflated to MIN_SOLID on every axis (a zero-thickness pane
@@ -234,6 +277,7 @@ export function createCity(game) {
     const solid = (name, w, h, d, x, y, z, opts = {}) => {
       const ry = opts.ry || 0;
       push(name, placed(boxGeo(w, h, d), x, y, z, ry));
+      occ.claim(w, h, d, x, y, z, ry);
       const cw = Math.max(w, MIN_SOLID);
       const ch = Math.max(h, MIN_SOLID);
       const cd = Math.max(d, MIN_SOLID);
@@ -259,6 +303,14 @@ export function createCity(game) {
       });
     };
 
+    // Same as solid(), but only when the spot is free. Returns false instead
+    // of drawing into (or adding a collider inside) another prop.
+    const trySolid = (name, w, h, d, x, y, z, opts = {}) => {
+      if (!occ.free(w, h, d, x, y, z, opts.ry || 0)) return false;
+      solid(name, w, h, d, x, y, z, opts);
+      return true;
+    };
+
     const x0 = cx * CELL;
     const z0 = cz * CELL;
 
@@ -279,17 +331,17 @@ export function createCity(game) {
       if (kind0 < 0.22) {
         // yard: one slab plus the container stacks, still solid
         push(MAT.dark, placed(boxGeo(lot0.w, 0.16, lot0.d), lot0.x + lot0.w / 2, baseY0 + 0.08, lot0.z + lot0.d / 2));
-        for (let i = 0; i < r.int(2, 4); i++) {
-          const cw0 = r.chance(0.5) ? 6.06 : 12.19;
-          const n0 = r.int(1, 3);
-          const cx0 = lot0.x + r.range(1, Math.max(1.2, lot0.w - cw0 - 1)) + cw0 / 2;
-          const cz0 = lot0.z + r.range(2.5, Math.max(3, lot0.d - 3.4)) + 1.22;
-          solid(
-            r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal",
-            cw0, 2.59 * n0, 2.44, cx0, baseY0 + 0.16 + (2.59 * n0) / 2, cz0,
-            { surface: "metal" },
-          );
-        }
+        const count0 = r.int(2, 4);
+        for (let i = 0; i < count0; i++)
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const cw0 = r.chance(0.5) ? 6.06 : 12.19;
+            const n0 = r.int(1, 3);
+            const cx0 = lot0.x + r.range(1, Math.max(1.2, lot0.w - cw0 - 1)) + cw0 / 2;
+            const cz0 = lot0.z + r.range(2.5, Math.max(3, lot0.d - 3.4)) + 1.22;
+            const name0 = r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal";
+            if (trySolid(name0, cw0, 2.59 * n0, 2.44, cx0, baseY0 + 0.16 + (2.59 * n0) / 2, cz0, { surface: "metal" }))
+              break;
+          }
       } else {
         const cols0 = kind0 < 0.6 ? 1 : 2;
         const rows0 = r() < 0.5 ? 1 : 2;
@@ -310,7 +362,13 @@ export function createCity(game) {
             const pz0 = lot0.z + j * cd0 + pad0 * 0.5 + d0 / 2;
             solid(
               r.pick([MAT.wallA, MAT.wallB, MAT.wallC, MAT.wallA, MAT.wallB]),
-              w0, h0, d0, px0, baseY0 + h0 / 2, pz0, { surface: "concrete" },
+              w0,
+              h0,
+              d0,
+              px0,
+              baseY0 + h0 / 2,
+              pz0,
+              { surface: "concrete" },
             );
             // parapet so the roofline is not a bare cut
             solid(MAT.wallB, w0 + 0.36, 0.7, d0 + 0.36, px0, baseY0 + h0 + 0.35, pz0, {
@@ -349,7 +407,7 @@ export function createCity(game) {
     const kind = r();
     if (kind < 0.22) {
       // low yard: container stacks, fenced compound
-      buildYard(push, solid, boxes, r, lot, baseY);
+      buildYard(push, solid, trySolid, occ, boxes, r, lot, baseY);
     } else {
       const cols = kind < 0.6 ? 1 : 2;
       const rows = r() < 0.5 ? 1 : 2;
@@ -362,6 +420,8 @@ export function createCity(game) {
           buildTower(
             push,
             solid,
+            trySolid,
+            occ,
             r,
             {
               x: lot.x + i * cw + pad * 0.5,
@@ -376,20 +436,22 @@ export function createCity(game) {
         }
     }
 
-    // street clutter along the road edge
+    // street clutter along the road edge: retry a different spot rather than
+    // dropping a dumpster straight through a bollard or a lamp mast.
     const clutter = r.int(0, 3);
-    for (let i = 0; i < clutter; i++) {
-      const px = x0 + ROAD - 1.1 + r.range(-0.5, 0.5);
-      const pz = z0 + r.range(6, CELL - 4);
-      buildClutter(push, solid, boxes, r, px, pz);
-    }
+    for (let i = 0; i < clutter; i++)
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const px = x0 + ROAD - 1.1 + r.range(-0.5, 0.5);
+        const pz = z0 + r.range(6, CELL - 4);
+        if (buildClutter(push, trySolid, occ, r, px, pz)) break;
+      }
     // one light mast per block, on the pavement corner
-    buildLamp(push, solid, r, x0 + ROAD + 0.6, z0 + ROAD + 0.6);
+    buildLamp(push, trySolid, r, x0 + ROAD + 0.6, z0 + ROAD + 0.6);
 
     return { geos, boxes, gc };
   }
 
-  function buildTower(push, solid, r, lot, baseY, cx, cz) {
+  function buildTower(push, solid, trySolid, occ, r, lot, baseY, cx, cz) {
     if (lot.w < 3 || lot.d < 3) return;
     const w = Math.min(lot.w, 26);
     const d = Math.min(lot.d, 26);
@@ -417,10 +479,18 @@ export function createCity(game) {
     const lip = 0.36;
     const lipH = 0.7;
     const lipY = baseY + h + lipH / 2;
-    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw - d / 2, { surface: "concrete" });
-    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw + d / 2, { surface: "concrete" });
-    solid(MAT.wallB, lip, lipH, d, cxw - w / 2, lipY, czw, { surface: "concrete" });
-    solid(MAT.wallB, lip, lipH, d, cxw + w / 2, lipY, czw, { surface: "concrete" });
+    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw - d / 2, {
+      surface: "concrete",
+    });
+    solid(MAT.wallB, w + lip, lipH, lip, cxw, lipY, czw + d / 2, {
+      surface: "concrete",
+    });
+    solid(MAT.wallB, lip, lipH, d, cxw - w / 2, lipY, czw, {
+      surface: "concrete",
+    });
+    solid(MAT.wallB, lip, lipH, d, cxw + w / 2, lipY, czw, {
+      surface: "concrete",
+    });
 
     // windows: rows of thin panes on all four faces, capped for budget
     const rows = Math.max(1, floors - 1);
@@ -442,20 +512,14 @@ export function createCity(game) {
         for (let i = 0; i < n && budget > 0; i++) {
           budget--;
           const lx = (i + 0.5) * (f.len / n) - f.len / 2;
-          const q = new THREE.PlaneGeometry(1.25, 1.55);
-          q.rotateY(Math.atan2(f.nx, f.nz));
-          q.translate(
-            cxw + f.ox + (f.nz ? lx : 0),
-            y,
-            czw + f.oz + (f.nx ? -lx : 0),
-          );
+          const wx = cxw + f.ox + (f.nz ? lx : 0);
+          const wz = czw + f.oz + (f.nx ? -lx : 0);
+          // A window is a thin solid pane, not a zero-thickness plane: a
+          // plane disappears when seen from behind and reads as a decal.
+          const pane = f.nz ? boxGeo(1.25, 1.55, 0.08) : boxGeo(0.08, 1.55, 1.25);
           const lit = r.chance(0.42);
-          const name = lit
-            ? r.chance(0.55)
-              ? "__winLit"
-              : "__winDim"
-            : "__glass";
-          push(name, q.toNonIndexed());
+          const name = lit ? (r.chance(0.55) ? "__winLit" : "__winDim") : "__glass";
+          push(name, placed(pane, wx, y, wz));
           // frame reveal — the detail that makes a flat wall read as a facade
           if (r.chance(0.35))
             push(
@@ -480,12 +544,7 @@ export function createCity(game) {
     const dl = df.len * 0.32;
     push(
       MAT.dark,
-      placed(
-        boxGeo(df.nx ? 0.12 : dl, 2.6, df.nx ? dl : 0.12),
-        cxw + df.ox * 1.02,
-        baseY + 1.3,
-        czw + df.oz * 1.02,
-      ),
+      placed(boxGeo(df.nx ? 0.12 : dl, 2.6, df.nx ? dl : 0.12), cxw + df.ox * 1.02, baseY + 1.3, czw + df.oz * 1.02),
     );
     if (r.chance(0.5)) {
       // Awning: a real ledge you can walk under, so it gets a collider (it is
@@ -507,61 +566,81 @@ export function createCity(game) {
     if (r.chance(0.6)) {
       const px = r.chance(0.5) ? cxw - w / 2 - 0.12 : cxw + w / 2 + 0.12;
       const pz = czw + r.range(-d / 3, d / 3);
-      for (let k = 0; k < 2; k++)
-        push(
-          MAT.dark,
-          placed(cylGeo(0.09, h * 0.9, 6), px + k * 0.22, baseY + h * 0.45, pz),
-        );
+      for (let k = 0; k < 2; k++) push(MAT.dark, placed(cylGeo(0.09, h * 0.9, 6), px + k * 0.22, baseY + h * 0.45, pz));
     }
 
     // rooftop clutter: AC blocks, a tank, an antenna, a stair bulkhead
     const roofY = baseY + h;
+    // Roof kit shares the slab with the tower body, so the body cannot be used
+    // as an occupancy test. Give the roof its own registry: without it the AC
+    // units, tank and stair bulkhead land at independent random points and
+    // interpenetrate.
+    const roofTaken = [];
+    const roofSpot = (rw, rd) => {
+      const loX = cxw - w / 2 + rw / 2 + 1.2;
+      const hiX = cxw + w / 2 - rw / 2 - 1.2;
+      const loZ = czw - d / 2 + rd / 2 + 1.2;
+      const hiZ = czw + d / 2 - rd / 2 - 1.2;
+      if (loX >= hiX || loZ >= hiZ) return null;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const rx = r.range(loX, hiX);
+        const rz = r.range(loZ, hiZ);
+        const hit = roofTaken.some(
+          (o) =>
+            rx - rw / 2 < o.x + o.w / 2 + 0.15 &&
+            rx + rw / 2 > o.x - o.w / 2 - 0.15 &&
+            rz - rd / 2 < o.z + o.d / 2 + 0.15 &&
+            rz + rd / 2 > o.z - o.d / 2 - 0.15,
+        );
+        if (hit) continue;
+        roofTaken.push({ x: rx, z: rz, w: rw, d: rd });
+        return { x: rx, z: rz };
+      }
+      return null;
+    };
+
     const ac = r.int(1, 4);
     for (let i = 0; i < ac; i++) {
       const bw = r.range(0.9, 2.1);
       const bd = r.range(0.8, 1.6);
       const bh = r.range(0.5, 1.1);
-      push(
-        MAT.metal,
-        placed(
-          boxGeo(bw, bh, bd),
-          cxw + r.range(-w / 2 + 1.2, w / 2 - 1.2),
-          roofY + bh / 2,
-          czw + r.range(-d / 2 + 1.2, d / 2 - 1.2),
-          r.range(0, Math.PI),
-        ),
-      );
+      // Claim the swept square so the rotated box stays inside its spot.
+      const span = Math.hypot(bw, bd);
+      const spot = roofSpot(span, span);
+      const ry = r.range(0, Math.PI);
+      if (spot) push(MAT.metal, placed(boxGeo(bw, bh, bd), spot.x, roofY + bh / 2, spot.z, ry));
     }
     if (r.chance(0.35) && Math.min(w, d) > 8) {
-      const tx = cxw + r.range(-w / 4, w / 4);
-      const tz = czw + r.range(-d / 4, d / 4);
-      push(MAT.wood, placed(cylGeo(1.15, 2.0, 12), tx, roofY + 1.9, tz));
-      push(MAT.wood, placed(cylGeo(1.22, 0.14, 12), tx, roofY + 2.95, tz));
-      for (const [ox, oz] of [
-        [-0.7, -0.7],
-        [0.7, -0.7],
-        [-0.7, 0.7],
-        [0.7, 0.7],
-      ])
-        push(MAT.dark, placed(boxGeo(0.1, 0.9, 0.1), tx + ox, roofY + 0.45, tz + oz));
+      const spot = roofSpot(2.6, 2.6);
+      if (spot) {
+        const tx = spot.x;
+        const tz = spot.z;
+        push(MAT.wood, placed(cylGeo(1.15, 2.0, 12), tx, roofY + 1.9, tz));
+        push(MAT.wood, placed(cylGeo(1.22, 0.14, 12), tx, roofY + 2.95, tz));
+        for (const [ox, oz] of [
+          [-0.7, -0.7],
+          [0.7, -0.7],
+          [-0.7, 0.7],
+          [0.7, 0.7],
+        ])
+          push(MAT.dark, placed(boxGeo(0.1, 0.9, 0.1), tx + ox, roofY + 0.45, tz + oz));
+      }
     }
     if (r.chance(0.4)) {
-      push(
-        MAT.dark,
-        placed(boxGeo(0.07, r.range(3, 7), 0.07), cxw, roofY + 2.4, czw + r.range(-2, 2)),
-      );
-      push(MAT.dark, placed(boxGeo(0.5, 0.05, 0.05), cxw, roofY + 4.4, czw));
+      const spot = roofSpot(0.6, 0.6);
+      if (spot) {
+        push(MAT.dark, placed(boxGeo(0.07, r.range(3, 7), 0.07), spot.x, roofY + 2.4, spot.z));
+        push(MAT.dark, placed(boxGeo(0.5, 0.05, 0.05), spot.x, roofY + 4.4, spot.z));
+      }
     }
     if (r.chance(0.5)) {
-      push(
-        MAT.wallB,
-        placed(boxGeo(2.6, 2.3, 2.2), cxw + r.range(-w / 5, w / 5), roofY + 1.15, czw + r.range(-d / 5, d / 5)),
-      );
+      const spot = roofSpot(2.6, 2.2);
+      if (spot) push(MAT.wallB, placed(boxGeo(2.6, 2.3, 2.2), spot.x, roofY + 1.15, spot.z));
     }
   }
 
   // A container yard: low, greasy, good for fighting in.
-  function buildYard(push, solid, boxes, r, lot, baseY) {
+  function buildYard(push, solid, trySolid, occ, boxes, r, lot, baseY) {
     const fenceH = 2.2;
     // Yard slab: a 16 cm platform, low enough to step onto, so no collider.
     push(MAT.dark, placed(boxGeo(lot.w, 0.16, lot.d), lot.x + lot.w / 2, baseY + 0.08, lot.z + lot.d / 2));
@@ -575,7 +654,9 @@ export function createCity(game) {
       push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x, baseY + fenceH / 2, lot.z));
       push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x, baseY + fenceH / 2, z1));
     }
-    for (let z = lot.z; z <= z1; z += step) {
+    // The corner posts are already emitted by the x loop above. Drawing them
+    // again here puts two identical boxes in the same place, which z-fights.
+    for (let z = lot.z + step; z < z1 - 1e-6; z += step) {
       push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), lot.x, baseY + fenceH / 2, z));
       push(MAT.metal, placed(boxGeo(0.1, fenceH, 0.1), x1, baseY + fenceH / 2, z));
     }
@@ -587,90 +668,125 @@ export function createCity(game) {
     // One collider per side, not per post: fewer boxes, same wall.
     const fw = MIN_SOLID;
     const fh = baseY + fenceH;
-    boxes.push({ min: [lot.x, 0, lot.z - fw / 2], max: [x1, fh, lot.z + fw / 2], surface: "metal" });
-    boxes.push({ min: [lot.x, 0, z1 - fw / 2], max: [x1, fh, z1 + fw / 2], surface: "metal" });
-    boxes.push({ min: [lot.x - fw / 2, 0, lot.z], max: [lot.x + fw / 2, fh, z1], surface: "metal" });
-    boxes.push({ min: [x1 - fw / 2, 0, lot.z], max: [x1 + fw / 2, fh, z1], surface: "metal" });
+    boxes.push({
+      min: [lot.x, 0, lot.z - fw / 2],
+      max: [x1, fh, lot.z + fw / 2],
+      surface: "metal",
+    });
+    boxes.push({
+      min: [lot.x, 0, z1 - fw / 2],
+      max: [x1, fh, z1 + fw / 2],
+      surface: "metal",
+    });
+    boxes.push({
+      min: [lot.x - fw / 2, 0, lot.z],
+      max: [lot.x + fw / 2, fh, z1],
+      surface: "metal",
+    });
+    boxes.push({
+      min: [x1 - fw / 2, 0, lot.z],
+      max: [x1 + fw / 2, fh, z1],
+      surface: "metal",
+    });
 
     const stacks = r.int(2, 4);
-    for (let i = 0; i < stacks; i++) {
-      const cw = r.chance(0.5) ? 6.06 : 12.19;
-      const cd = 2.44;
-      const cx = lot.x + r.range(1, Math.max(1.2, lot.w - cw - 1)) + cw / 2;
-      const cz = lot.z + r.range(2.5, Math.max(3, lot.d - cd - 1)) + cd / 2;
-      const n = r.int(1, 3);
-      for (let k = 0; k < n; k++) {
-        const ch = 2.59;
-        push(
-          r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal",
-          placed(
-            boxGeo(cw, ch, cd),
-            cx,
-            baseY + 0.16 + ch / 2 + k * ch,
-            cz,
-            r.range(-0.03, 0.03),
-          ),
-        );
-        // Corrugation ribs so the container is not a plain slab. They are 4 cm
-        // proud of the wall and belong to the container's own collider, so they
-        // are drawn only — a collider here would fight the container box.
-        for (let i2 = 0; i2 < 4; i2++)
+    for (let i = 0; i < stacks; i++)
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const cw = r.chance(0.5) ? 6.06 : 12.19;
+        const cd = 2.44;
+        const cx = lot.x + r.range(1, Math.max(1.2, lot.w - cw - 1)) + cw / 2;
+        const cz = lot.z + r.range(2.5, Math.max(3, lot.d - cd - 1)) + cd / 2;
+        const n = r.int(1, 3);
+        const stackH = 0.16 + n * 2.59;
+        if (!occ.free(cw, stackH, cd, cx, baseY + stackH / 2, cz)) continue;
+        for (let k = 0; k < n; k++) {
+          const ch = 2.59;
           push(
-            MAT.metal,
-            placed(
-              boxGeo(cw * 0.9, 0.04, 0.08),
-              cx,
-              baseY + 0.16 + 0.5 + i2 * 0.55 + k * ch,
-              cz + cd / 2 + 0.04,
-            ),
+            r.chance(0.5) ? "paint_red" : r.chance(0.5) ? "paint_blue" : "paint_teal",
+            placed(boxGeo(cw, ch, cd), cx, baseY + 0.16 + ch / 2 + k * ch, cz, r.range(-0.03, 0.03)),
           );
+          // Corrugation ribs so the container is not a plain slab. They are 4 cm
+          // proud of the wall and belong to the container's own collider, so they
+          // are drawn only — a collider here would fight the container box.
+          for (let i2 = 0; i2 < 4; i2++)
+            push(
+              MAT.metal,
+              placed(boxGeo(cw * 0.9, 0.04, 0.08), cx, baseY + 0.16 + 0.5 + i2 * 0.55 + k * ch, cz + cd / 2 + 0.04),
+            );
+        }
+        boxes.push({
+          min: [cx - cw / 2, baseY, cz - cd / 2],
+          max: [cx + cw / 2, baseY + stackH, cz + cd / 2],
+          surface: "metal",
+        });
+        occ.claim(cw, stackH, cd, cx, baseY + stackH / 2, cz);
+        break;
       }
-      boxes.push({
-        min: [cx - cw / 2, baseY, cz - cd / 2],
-        max: [cx + cw / 2, baseY + 0.16 + n * 2.59, cz + cd / 2],
-        surface: "metal",
-      });
-    }
     // Drums: 90 cm tall, so they need a footprint or you walk through them.
-    for (let i = 0; i < r.int(2, 5); i++) {
-      const dx = lot.x + r.range(1, lot.w - 1);
-      const dz = lot.z + r.range(1, lot.d - 1);
-      push(r.chance(0.5) ? "paint_yellow" : "paint_green", placed(cylGeo(0.3, 0.9, 10), dx, baseY + 0.45, dz));
-      boxes.push({
-        min: [dx - 0.3, 0, dz - 0.3],
-        max: [dx + 0.3, baseY + 0.9, dz + 0.3],
-        surface: "metal",
-      });
-    }
+    // They also must not be dropped inside a container stack.
+    const drums = r.int(2, 5);
+    for (let i = 0; i < drums; i++)
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const dx = lot.x + r.range(1, lot.w - 1);
+        const dz = lot.z + r.range(1, lot.d - 1);
+        const drumTop = baseY + 0.16 + 0.9;
+        if (!occ.free(0.6, drumTop, 0.6, dx, drumTop / 2, dz)) continue;
+        // Sit the drum on top of the 16 cm yard slab, not 16 cm inside it.
+        push(r.chance(0.5) ? "paint_yellow" : "paint_green", placed(cylGeo(0.3, 0.9, 10), dx, baseY + 0.16 + 0.45, dz));
+        boxes.push({
+          min: [dx - 0.3, 0, dz - 0.3],
+          max: [dx + 0.3, drumTop, dz + 0.3],
+          surface: "metal",
+        });
+        occ.claim(0.6, drumTop, 0.6, dx, drumTop / 2, dz);
+        break;
+      }
   }
 
   // Street furniture. Everything here is waist height or taller, so every piece
   // gets a collider — a dumpster you can walk through breaks the illusion as
   // badly as a wall you can walk through.
-  function buildClutter(push, solid, boxes, r, x, z) {
+  function buildClutter(push, trySolid, occ, r, x, z) {
     const k = r();
     if (k < 0.4) {
       const ry = r.range(-0.4, 0.4);
-      solid(MAT.dark, 1.9, 1.35, 1.1, x, 0.68, z, { ry, surface: "metal" });
+      if (
+        !trySolid(MAT.dark, 1.9, 1.35, 1.1, x, 0.68, z, {
+          ry,
+          surface: "metal",
+        })
+      )
+        return false;
       push(MAT.paintY, placed(boxGeo(1.94, 0.1, 1.14), x, 1.38, z, ry));
     } else if (k < 0.72) {
-      for (let i = 0; i < 2; i++) {
-        const cx2 = x + i * 0.7;
-        const cz2 = z + i * 0.2;
-        solid(MAT.paintY, 0.36, 0.7, 0.36, cx2, 0.35, cz2, { surface: "concrete" });
-      }
+      const spots = [
+        { x, z },
+        { x: x + 0.7, z: z + 0.2 },
+      ];
+      if (!spots.every((s) => occ.free(0.36, 0.7, 0.36, s.x, 0.35, s.z))) return false;
+      for (const s of spots)
+        trySolid(MAT.paintY, 0.36, 0.7, 0.36, s.x, 0.35, s.z, {
+          surface: "concrete",
+        });
     } else {
       const ry = r.range(0, 3);
-      solid(MAT.metal, 1.2, 1.1, 1.0, x, 0.55, z, { ry, surface: "metal" });
+      if (
+        !trySolid(MAT.metal, 1.2, 1.1, 1.0, x, 0.55, z, {
+          ry,
+          surface: "metal",
+        })
+      )
+        return false;
       push(MAT.wood, placed(boxGeo(1.1, 0.14, 0.9), x, 1.17, z, ry));
     }
+    return true;
   }
 
-  function buildLamp(push, solid, r, x, z) {
+  function buildLamp(push, trySolid, r, x, z) {
     const h = r.range(7, 11);
     // The mast is an 11 cm cylinder: solid() gives it a 30 cm collider so you
     // cannot walk through the pole.
-    solid(MAT.dark, 0.22, h, 0.22, x, h / 2, z, { surface: "metal" });
+    if (!trySolid(MAT.dark, 0.22, h, 0.22, x, h / 2, z, { surface: "metal" })) return;
     push(MAT.dark, placed(boxGeo(1.5, 0.1, 0.1), x + 0.75, h - 0.1, z));
     push("__neonC", placed(boxGeo(0.7, 0.16, 0.4), x + 1.35, h - 0.25, z));
   }
@@ -683,20 +799,42 @@ export function createCity(game) {
     const x0 = cx * CELL;
     const z0 = cz * CELL;
     const blocks = r.int(1, 3);
-    for (let i = 0; i < blocks; i++) {
-      const w = r.range(12, 30);
-      const d = r.range(12, 30);
-      const h = r.range(9, 52);
-      const x = x0 + r.range(3, CELL - w - 3) + w / 2;
-      const z = z0 + r.range(3, CELL - d - 3) + d / 2;
-      out.push(placed(boxGeo(w, h, d), x, h / 2, z));
-      if (r.chance(0.55)) {
-        const q = new THREE.PlaneGeometry(w * 0.8, 0.5);
-        q.rotateY(r.chance(0.5) ? 0 : Math.PI / 2);
-        q.translate(x, r.range(4, h - 2), z + d / 2 + 0.05);
-        out.push(q.toNonIndexed());
+    const taken = [];
+    for (let i = 0; i < blocks; i++)
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const w = r.range(12, 30);
+        const d = r.range(12, 30);
+        const h = r.range(9, 52);
+        const x = x0 + r.range(3, CELL - w - 3) + w / 2;
+        const z = z0 + r.range(3, CELL - d - 3) + d / 2;
+        const box = {
+          minX: x - w / 2,
+          maxX: x + w / 2,
+          minZ: z - d / 2,
+          maxZ: z + d / 2,
+        };
+        if (taken.some((o) => box.minX < o.maxX && box.maxX > o.minX && box.minZ < o.maxZ && box.maxZ > o.minZ))
+          continue;
+        taken.push(box);
+        out.push({ geo: placed(boxGeo(w, h, d), x, h / 2, z), lit: false });
+        if (r.chance(0.55)) {
+          // A lit band is a thin solid box on one of the four faces. A
+          // zero-thickness plane has no volume, vanishes when seen from
+          // behind and, rotated 90 degrees but still offset on +Z, cuts
+          // straight through the building it belongs to.
+          const face = r.int(0, 3);
+          const band = face < 2 ? w * 0.8 : d * 0.8;
+          const by = r.range(4, Math.max(4.5, h - 2));
+          const t = 0.08;
+          let geo;
+          if (face === 0) geo = placed(boxGeo(band, 0.5, t), x, by, z - d / 2 - t / 2);
+          else if (face === 1) geo = placed(boxGeo(band, 0.5, t), x, by, z + d / 2 + t / 2);
+          else if (face === 2) geo = placed(boxGeo(t, 0.5, band), x - w / 2 - t / 2, by, z);
+          else geo = placed(boxGeo(t, 0.5, band), x + w / 2 + t / 2, by, z);
+          out.push({ geo, lit: true });
+        }
+        break;
       }
-    }
     return out;
   }
 
@@ -798,9 +936,7 @@ export function createCity(game) {
     cell.group = buildCellGroup(data.geos, cityMat, true);
     root.add(cell.group);
     for (const b of data.boxes) {
-      cell.boxRefs.push(
-        physics.addBox(b.min, b.max, { surface: b.surface, tag: "city" }),
-      );
+      cell.boxRefs.push(physics.addBox(b.min, b.max, { surface: b.surface, tag: "city" }));
     }
     stats.cells = nearCells.size;
   }
@@ -852,9 +988,11 @@ export function createCity(game) {
         list = buildFar(cx, cz);
         farCacheGeo.set(key, list);
       }
-      // clone: merge() disposes its inputs, and the cache keeps them alive
-      for (let i = 0; i < list.length; i++)
-        bucket(geos, i % 2 === 0 ? "concrete_dirty" : "__farLit").push(list[i].clone());
+      // clone: merge() disposes its inputs, and the cache keeps them alive.
+      // Bucket by what the geometry actually is, not by array index: the old
+      // index-parity split handed whole buildings the window material and
+      // handed flat quads the concrete material whenever a block had no band.
+      for (const item of list) bucket(geos, item.lit ? "__winLit" : "concrete_dirty").push(item.geo.clone());
     }
     farGroup = buildCellGroup(geos, farMat, false);
     farGroup.name = "city-horizon";
@@ -872,13 +1010,7 @@ export function createCity(game) {
         // terminal is never built over and the gate opens onto a plaza.
         const lx = cx * CELL + ROAD;
         const lz = cz * CELL + ROAD;
-        if (
-          lx < RESERVED.x1 &&
-          lx + CELL > RESERVED.x0 &&
-          lz < RESERVED.z1 &&
-          lz + CELL > RESERVED.z0
-        )
-          continue;
+        if (lx < RESERVED.x1 && lx + CELL > RESERVED.x0 && lz < RESERVED.z1 && lz + CELL > RESERVED.z0) continue;
         const mx = cx * CELL + CELL / 2;
         if (mx > 24) continue; // east of the quay is water
         const ring = Math.max(Math.abs(dx), Math.abs(dz));
@@ -1003,10 +1135,8 @@ export function createCity(game) {
     get stats() {
       let tris = 0;
       for (const c of nearCells.values())
-        if (c.group)
-          for (const m of c.group.children) tris += m.geometry.attributes.position.count / 3;
-      if (farGroup)
-        for (const m of farGroup.children) tris += m.geometry.attributes.position.count / 3;
+        if (c.group) for (const m of c.group.children) tris += m.geometry.attributes.position.count / 3;
+      if (farGroup) for (const m of farGroup.children) tris += m.geometry.attributes.position.count / 3;
       return {
         cells: stats.cells,
         far: farSet.size,
