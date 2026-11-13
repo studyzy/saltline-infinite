@@ -4,6 +4,8 @@
 // three.js identifiers are aliased to public exports below, so the game body
 // itself stays byte-identical to the original (apart from formatting).
 import * as THREE from './vendor/three.module.js';
+import { t as tr, getLang, setLang, applyI18n, LANGS } from './i18n.js';
+import { createCity } from './city.js';
 
 const _M = Object.defineProperty;
 const br = (i, e) => {
@@ -287,6 +289,13 @@ var oi = {
         isPuddle: () => !1,
       }),
       backdrop: () => ({ stub: !0, update: Wt }),
+      city: () => ({
+        stub: !0,
+        update: Wt,
+        stats: { cells: 0, tris: 0 },
+        spawnPoint: () => null,
+        blockedAt: () => !1,
+      }),
       fx: () => ({
         stub: !0,
         update: Wt,
@@ -5355,7 +5364,7 @@ float metalnessFactor = metalness * slORM.b;
   }
   var u1 = 0.42,
     Ls = 0.5,
-    Ya = -40,
+    Ya = -420,
     EA = 31,
     ol = -32,
     SA = 30,
@@ -5369,7 +5378,7 @@ float metalnessFactor = metalness * slORM.b;
       s = new W(),
       o = {
         boxes: e,
-        bounds: { min: oi.min.clone(), max: oi.max.clone() },
+        bounds: { min: new W(-3000, 0, -3000), max: new W(38, 60, 3000) },
         addBox(_, M, E = {}) {
           let w = f3(_),
             S = f3(M),
@@ -5392,6 +5401,23 @@ float metalnessFactor = metalness * slORM.b;
             };
           return e.push(z), (t = !0), z;
         },
+        // True where a city building or yard fence stands. Only the city's own
+        // boxes are consulted, and only while the query is off the port grid.
+        cityBlocked(_, M) {
+          for (let E = 0; E < e.length; E++) {
+            let w = e[E];
+            if (w.tag !== "city" || w.noNav || w.bulletOnly) continue;
+            if (
+              _ > w.min.x - 0.3 &&
+              _ < w.max.x + 0.3 &&
+              M > w.min.z - 0.3 &&
+              M < w.max.z + 0.3 &&
+              w.max.y > u1 + 0.05
+            )
+              return !0;
+          }
+          return !1;
+        },
         removeBox(_) {
           let M = e.indexOf(_);
           M >= 0 && (e.splice(M, 1), (t = !0));
@@ -5413,12 +5439,14 @@ float metalnessFactor = metalness * slORM.b;
             G = M.z;
           if (C < -1e-6) {
             let F = (oi.groundY - U) / C;
-            if (F > 0 && F < w)
-              if (q + D * F <= oi.quayX) (w = F), (O = 1);
+            if (F > 0 && F < w) {
+              let hx = q + D * F;
+              if (hx <= oi.quayX || hx < Li.x0) (w = F), (O = 1);
               else {
                 let ne = (oi.seaY - U) / C;
                 ne > 0 && ne < w && ((w = ne), (O = 2));
               }
+            }
           }
           let j = D === 0 ? 1 / 0 : 1 / D,
             N = C === 0 ? 1 / 0 : 1 / C,
@@ -5505,7 +5533,7 @@ float metalnessFactor = metalness * slORM.b;
             : (s.multiplyScalar(1 / E), !o.raycast(_, s, E - 0.05));
         },
         groundHeight(_, M, E = 50) {
-          let w = _ <= oi.quayX ? oi.groundY : oi.seaY;
+          let w = _ <= oi.quayX || _ < Li.x0 ? oi.groundY : oi.seaY;
           for (let S = 0; S < e.length; S++) {
             let z = e[S];
             z.bulletOnly ||
@@ -5576,7 +5604,7 @@ float metalnessFactor = metalness * slORM.b;
           }
           let D = _.y + M.y * E,
             C = w * 0.7,
-            G = _.x <= oi.quayX + C ? oi.groundY : -50,
+            G = _.x <= oi.quayX + C || _.x < Li.x0 ? oi.groundY : -50,
             j = null,
             N = 1 / 0,
             Q = T + (z ? u1 : 0.08) + 1e-4;
@@ -5611,13 +5639,30 @@ float metalnessFactor = metalness * slORM.b;
         },
         nav: {
           cell: Ls,
+          // The port has a baked nav grid; the endless city does not. Outside
+          // the grid we answer from the city's own collider boxes instead, so
+          // machines can chase the player out of the fence.
           isWalkable(_, M) {
             r();
             let E = l(_, M);
-            return E >= 0 && !n[E];
+            if (E < 0) return !o.cityBlocked(_, M);
+            return !n[E];
           },
           findPath(_, M) {
             r();
+            let inA = l(_.x, _.z) >= 0,
+              inB = l(M.x, M.z) >= 0;
+            if (!inA || !inB) {
+              // Rough city route: aim straight, let the capsule slide.
+              if (!o.cityBlocked(M.x, M.z)) return [new W(M.x, 0, M.z)];
+              for (let q = 0; q < 12; q++) {
+                let S = (q / 12) * Math.PI * 2,
+                  z = 6 + q;
+                if (!o.cityBlocked(M.x + Math.cos(S) * z, M.z + Math.sin(S) * z))
+                  return [new W(M.x + Math.cos(S) * z, 0, M.z + Math.sin(S) * z)];
+              }
+              return null;
+            }
             let E = u(_.x, _.z),
               w = u(M.x, M.z);
             if (E < 0 || w < 0) return null;
@@ -5648,10 +5693,17 @@ float metalnessFactor = metalness * slORM.b;
                 H = _.x + Math.cos(S) * z,
                 O = _.z + Math.sin(S) * z,
                 q = l(H, O);
-              if (q >= 0 && !n[q]) return new W(H, 0, O);
+              // Off the port grid we are in the city: judge by its buildings.
+              if (q < 0) {
+                if (!o.cityBlocked(H, O)) return new W(H, 0, O);
+                continue;
+              }
+              if (!n[q]) return new W(H, 0, O);
             }
             let E = u(_.x, _.z);
-            return E >= 0 ? c(E) : new W(_.x, 0, _.z);
+            if (E >= 0) return c(E);
+            // Outside the grid: never teleport the caller back to the port.
+            return o.cityBlocked(_.x, _.z) ? null : new W(_.x, 0, _.z);
           },
           clearLine(_, M) {
             r();
@@ -5679,13 +5731,11 @@ float metalnessFactor = metalness * slORM.b;
         for (let z = w; z <= S; z++)
           for (let H = M; H <= E; H++) n[z * qt + H] = 1;
       }
+      // Edge rows are walls, but the west edge is open: that is the way out
+      // into the city. The quay and the two other edges stay closed.
       for (let _ = 0; _ < Qs; _++)
         for (let M = 0; M < qt; M++)
-          (Ya + (M + 0.5) * Ls > oi.quayX - yf ||
-            M === 0 ||
-            _ === 0 ||
-            M === qt - 1 ||
-            _ === Qs - 1) &&
+          (Ya + (M + 0.5) * Ls > oi.quayX - yf || _ === 0 || _ === Qs - 1) &&
             (n[_ * qt + M] = 1);
     }
     function l(_, M) {
@@ -15701,6 +15751,8 @@ float metalnessFactor = metalness * slORM.b;
     }
     l(t, s, n, s, 100),
       l(t, o, n, o, 200),
+      // West side is split around the gate mouth so the fence collider leaves
+      // a real exit: z = 2..8 is open road out into the city.
       l(t, s, t, r, 300),
       l(t, a, t, o, 400);
     for (let c of [r - 0.1, a + 0.1])
@@ -15723,32 +15775,42 @@ float metalnessFactor = metalness * slORM.b;
       for (let h of [c - 2.4, c + 2.4])
         i.cyl("rubber", 0.09, 0.05, u, 0.1, h, { axis: "x", seg: 10 });
     }
-    i.col(t - 0.4, 0, r, t - 0.1, 7, a, "metal", { playerOnly: !0 }),
-      e("guard_booth", -35.2, 0.35, 0, { seed: 1 }),
-      e("gate_arm", -36.3, 5, ts, { seed: 2 });
+    // The gate stands open: this is where the city begins.
+    e("guard_booth", -35.2, 0.35, 0, { seed: 1 });
+    {
+      let c = (r + a) * 0.5,
+        u = t + 0.4;
+      for (let h of [r - 0.1, a + 0.1])
+        i.box("steel_dark", 0.24, 3.6, 0.24, u, 1.8, h, { r: 0.02 }),
+          i.box("hazard_stripes", 0.28, 1.2, 0.28, u, 0.6, h, { r: 0.02 }),
+          i.col(u - 0.14, 0, h - 0.14, u + 0.14, 3.6, h + 0.14, "metal");
+      // boom arm cranked up out of the way
+      i.box("hazard_stripes", 0.16, 5.2, 0.16, u + 0.1, 4.2, r + 0.3, { r: 0.02 });
+      i.box("steel_dark", 0.5, 0.38, 0.5, u + 0.1, 0.19, r + 0.3, { r: 0.02 });
+      i.label("CITY", 0.7, 2.9, 2.1, c, "x-", { color: "white", distress: 0.4 });
+    }
     for (let [c, u] of [
-      [-37, 1.75],
-      [-34.4, 2.3],
-      [-37, 8.3],
-      [-35.6, 8.9],
-      [-34.4, 9.9],
+      [-37, 1.35],
+      [-37, 8.65],
+      [-35.6, 9.4],
+      [-34.4, 10.2],
       [-33.5, -1.1],
     ])
       e("bollard_post", c, u, 0, { seed: Math.round(c * 11 + u * 7) });
-    e("jersey_barrier", -34.7, 3.75, ts + 0.08, { seed: 3 }),
-      e("jersey_barrier", -33.3, 8.3, ts - 0.06, { seed: 4 }),
-      e("jersey_barrier", -30.6, 10.4, 0.03, { seed: 5 }),
-      e("jersey_barrier", -27.3, 1.45, 0.05, { seed: 6 }),
-      e("jersey_barrier", -32.2, 1.45, -0.04, { seed: 7 }),
+    // Barriers flank the gate mouth (z 2..8 stays clear to walk through).
+    e("jersey_barrier", -33.3, 9.4, ts - 0.06, { seed: 4 }),
+      e("jersey_barrier", -30.2, 10.6, 0.03, { seed: 5 }),
+      e("jersey_barrier", -27.3, 1.1, 0.05, { seed: 6 }),
+      e("jersey_barrier", -32.2, 0.5, -0.04, { seed: 7 }),
       e("sign_post", -33.2, 9.6, ts, { seed: 8, sign: "no_entry" }),
       e("sign_post", -25.3, 1.1, ts, { seed: 9, sign: "berth4" }),
       e("sign_post", -36.6, -1.6, ts, { seed: 10, sign: "hazard_general" });
     for (let [c, u] of [
-      [-34.6, 5.6],
-      [-28.3, 2],
-      [-33.2, 6.5],
+      [-33.0, 0.2],
+      [-29.6, 0.6],
+      [-31.2, 9.6],
       [-26.6, 9.8],
-      [-31.8, 9.9],
+      [-31.8, 11.2],
     ])
       e("traffic_cone", c, u, 0, { seed: Math.round(c * 5 + u * 3) });
     e("light_mast", -27.6, -0.9, 0, { seed: 11 }),
@@ -28338,12 +28400,12 @@ void main() {
         },
         describeMode() {
           return f.mode === "touch"
-            ? "Touch controls active"
+            ? tr("mode_touch")
             : f.mode === "drag"
-              ? "Mouse capture unavailable \u2014 move the mouse to look, rest it at a screen edge to keep turning \xB7 click fires \xB7 arrows or IJKL also turn"
+              ? tr("mode_drag")
               : f.locked
-                ? "Mouse captured \u2014 Esc releases it"
-                : "Click the view to capture the mouse";
+                ? tr("mode_locked")
+                : tr("mode_click");
         },
       };
     function p(P) {
@@ -28499,7 +28561,7 @@ void main() {
       let P = document.createElement("div");
       (P.className = "touch"),
         (P.innerHTML =
-          '<div class="t-stick"><i class="t-ring"></i><i class="t-nub"></i></div><button class="t-btn t-fire" data-a="fire" aria-label="Fire"><span>FIRE</span></button><button class="t-btn t-ads" data-a="ads" aria-label="Aim"><span>AIM</span></button><button class="t-btn t-reload" data-a="reload" aria-label="Reload"><span>RLD</span></button><button class="t-btn t-jump" data-a="jump" aria-label="Jump"><span>JUMP</span></button><button class="t-btn t-interact" data-a="interact" aria-label="Interact"><span>USE</span></button><button class="t-btn t-pause" data-a="pause" aria-label="Pause"><span>II</span></button>'),
+          `<div class="t-stick"><i class="t-ring"></i><i class="t-nub"></i></div><button class="t-btn t-fire" data-a="fire" aria-label="${tr("keys_fire")}"><span>${tr("tbtn_fire")}</span></button><button class="t-btn t-ads" data-a="ads" aria-label="${tr("keys_aim")}"><span>${tr("tbtn_aim")}</span></button><button class="t-btn t-reload" data-a="reload" aria-label="${tr("keys_reload")}"><span>${tr("tbtn_reload")}</span></button><button class="t-btn t-jump" data-a="jump" aria-label="${tr("keys_jump")}"><span>${tr("tbtn_jump")}</span></button><button class="t-btn t-interact" data-a="interact" aria-label="${tr("tbtn_use")}"><span>${tr("tbtn_use")}</span></button><button class="t-btn t-pause" data-a="pause" aria-label="${tr("keys_pause")}"><span>${tr("tbtn_pause")}</span></button>`),
         t.appendChild(P);
       let V = (L) => P.querySelector(L),
         Y = {
@@ -35968,8 +36030,8 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
   }
   function hM(i) {
     let e = document.getElementById("ui"),
-      t = li("div", "hud");
-    t.setAttribute("aria-hidden", "true");
+      hud = li("div", "hud");
+    hud.setAttribute("aria-hidden", "true");
     let n = li("div", "h-compass"),
       s = li("div", "h-tape"),
       o = "";
@@ -35993,7 +36055,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     let c = li(
         "div",
         "h-obj",
-        '<div class="h-k">Objective</div><div class="h-obj-t"></div><div class="h-relays"><span>Relays</span><i></i><i></i><i></i><b>0/3</b></div>',
+        `<div class="h-k">${tr("hud_objective")}</div><div class="h-obj-t"></div><div class="h-relays"><span>${tr("hud_relays")}</span><i></i><i></i><i></i><b>0/3</b></div>`,
       ),
       u = c.querySelector(".h-obj-t"),
       h = c.querySelector(".h-relays"),
@@ -36031,7 +36093,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       S = li(
         "div",
         "h-health",
-        '<div class="h-k">Vitals</div><div class="h-hp-row"><b class="h-hp-n">100</b><div class="h-hp-bar">' +
+        `<div class="h-k">${tr("hud_vitals")}</div><div class="h-hp-row"><b class="h-hp-n">100</b><div class="h-hp-bar">` +
           "<i></i>".repeat(10) +
           "</div></div>",
       ),
@@ -36048,11 +36110,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       D = O.querySelector(".h-wname"),
       C = O.querySelector(".h-cue"),
       G = li("div", "h-marks");
-    t.append(G, n, c, d, y, v, x, m, E, w, S, O), e.appendChild(t);
+    hud.append(G, n, c, d, y, v, x, m, E, w, S, O), e.appendChild(hud);
     let j = li(
       "div",
       "comms",
-      '<span class="comms-who">Control</span><span class="comms-t"></span>',
+      `<span class="comms-who">${tr("hud_control")}</span><span class="comms-t"></span>`,
     );
     j.setAttribute("role", "status"), j.setAttribute("aria-live", "polite");
     let N = j.querySelector(".comms-t");
@@ -36122,13 +36184,13 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             fe &&
             le === i.time.frame &&
             !fe.weak &&
-            ((fe.weak = !0), (fe.el.innerHTML += "<em>Weak point</em>"));
+            ((fe.weak = !0), (fe.el.innerHTML += `<em>${tr("hud_weak")}</em>`));
       }),
       i.events.on("enemy:killed", (k) => {
         let ce = String(
           (k && (k.type || (k.enemy && k.enemy.type))) || "machine",
         ).toUpperCase();
-        (fe = I.feed(`<b>${ce}</b> destroyed`)), (le = i.time.frame);
+        (fe = I.feed(`<b>${ce}</b> ${tr("hud_destroyed")}`)), (le = i.time.frame);
       }),
       i.events.on("player:hit", (k) => {
         if (!k || !k.fromPos) return;
@@ -36143,9 +36205,9 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         ce.src.copy(k.fromPos), (ce.life = 1.5), (ce.max = 1.5);
       });
     let I = {
-      root: t,
+      root: hud,
       show(k) {
-        (k = !!k), k !== Q && ((Q = k), t.classList.toggle("on", k), k && R());
+        (k = !!k), k !== Q && ((Q = k), hud.classList.toggle("on", k), k && R());
       },
       setObjective(k) {
         (k = k || ""),
@@ -36224,7 +36286,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           ((X.promptKey = _e),
           (_.textContent = _e),
           _.classList.toggle("wide", _e.length > 1));
-        let Te = `Hold ${_e} \u2014 ${k}`;
+        let Te = tr("hud_hold", { key: _e, label: k });
         Te !== X.promptText && ((X.promptText = Te), (M.textContent = Te));
         let Pe = Math.round(ce * 200) / 200;
         Pe !== X.promptT &&
@@ -36286,6 +36348,33 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           I.setPrompt(null),
           I.setObjective(""),
           (X.hp = -1);
+      },
+      relabel() {
+        let k = c.querySelector(".h-k"),
+          ve = h.querySelector("span"),
+          _e = j.querySelector(".comms-who"),
+          Te = S.querySelector(".h-k");
+        k && (k.textContent = tr("hud_objective")),
+          ve && (ve.textContent = tr("hud_relays")),
+          Te && (Te.textContent = tr("hud_vitals")),
+          _e && (_e.textContent = tr("hud_control")),
+          (X.cue = null),
+          (X.promptText = null);
+        let Pe = {
+          fire: ["tbtn_fire", "keys_fire"],
+          ads: ["tbtn_aim", "keys_aim"],
+          reload: ["tbtn_reload", "keys_reload"],
+          jump: ["tbtn_jump", "keys_jump"],
+          interact: ["tbtn_use", "tbtn_use"],
+          pause: ["tbtn_pause", "keys_pause"],
+        };
+        document.querySelectorAll(".touch .t-btn").forEach((Re) => {
+          let Fe = Pe[Re.dataset.a];
+          if (!Fe) return;
+          let we = Re.querySelector("span");
+          we && (we.textContent = t(Fe[0])),
+            Re.setAttribute("aria-label", t(Fe[1]));
+        });
       },
       update: se,
     };
@@ -36411,15 +36500,15 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       let Ie = dt <= Math.ceil(Ne * 0.27),
         Be =
           ve.state === "reloading"
-            ? "Reloading"
+            ? tr("hud_reloading")
             : dt === 0
               ? xe > 0
                 ? i.input.touch
-                  ? "Reload"
-                  : "R \u2014 Reload"
-                : "Empty"
+                  ? tr("hud_reload")
+                  : tr("hud_reload_key")
+                : tr("hud_empty")
               : Ie
-                ? "Low ammo"
+                ? tr("hud_low")
                 : "";
       Be !== X.cue &&
         ((X.cue = Be),
@@ -36521,33 +36610,35 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       localStorage.setItem(fM, JSON.stringify(i));
     } catch {}
   }
-  var $C = `
-  <dl class="keys">
-    <div><dt>Move</dt><dd><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dd></div>
-    <div><dt>Look</dt><dd>Mouse</dd></div>
-    <div><dt>Fire</dt><dd>Left button</dd></div>
-    <div><dt>Aim</dt><dd>Right button</dd></div>
-    <div><dt>Reload</dt><dd><kbd>R</kbd></dd></div>
-    <div><dt>Cut relay</dt><dd>Hold <kbd>E</kbd></dd></div>
-    <div><dt>Jump</dt><dd><kbd>Space</kbd></dd></div>
-    <div><dt>Sprint</dt><dd><kbd>Shift</kbd></dd></div>
-    <div><dt>Crouch</dt><dd><kbd>C</kbd> or <kbd>Ctrl</kbd></dd></div>
-    <div><dt>Melee</dt><dd><kbd>F</kbd></dd></div>
-    <div><dt>Pause</dt><dd><kbd>Esc</kbd> or <kbd>P</kbd></dd></div>
-  </dl>`,
-    ZC = `
-  <dl class="keys">
-    <div><dt>Move</dt><dd>Left thumb, anywhere</dd></div>
-    <div><dt>Look</dt><dd>Drag the right side</dd></div>
-    <div><dt>Fire</dt><dd>Hold FIRE, drag to track</dd></div>
-    <div><dt>Aim</dt><dd>AIM toggles</dd></div>
-    <div><dt>Reload</dt><dd>RLD</dd></div>
-    <div><dt>Jump</dt><dd>JUMP</dd></div>
-    <div><dt>Cut relay</dt><dd>Hold USE at a relay</dd></div>
-    <div><dt>Sprint</dt><dd>Push the stick fully forward</dd></div>
+  function keysKb() {
+    return `<dl class="keys">
+    <div><dt>${tr("keys_move")}</dt><dd><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dd></div>
+    <div><dt>${tr("keys_look")}</dt><dd>${tr("mouse")}</dd></div>
+    <div><dt>${tr("keys_fire")}</dt><dd>${tr("lmb")}</dd></div>
+    <div><dt>${tr("keys_aim")}</dt><dd>${tr("rmb")}</dd></div>
+    <div><dt>${tr("keys_reload")}</dt><dd><kbd>R</kbd></dd></div>
+    <div><dt>${tr("keys_cut")}</dt><dd><kbd>E</kbd></dd></div>
+    <div><dt>${tr("keys_jump")}</dt><dd><kbd>Space</kbd></dd></div>
+    <div><dt>${tr("keys_sprint")}</dt><dd><kbd>Shift</kbd></dd></div>
+    <div><dt>${tr("keys_crouch")}</dt><dd><kbd>C</kbd> / <kbd>Ctrl</kbd></dd></div>
+    <div><dt>${tr("keys_melee")}</dt><dd><kbd>F</kbd></dd></div>
+    <div><dt>${tr("keys_pause")}</dt><dd><kbd>Esc</kbd> / <kbd>P</kbd></dd></div>
   </dl>`;
+  }
+  function keysTouch() {
+    return `<dl class="keys">
+    <div><dt>${tr("keys_move")}</dt><dd>${tr("touch_move")}</dd></div>
+    <div><dt>${tr("keys_look")}</dt><dd>${tr("touch_look")}</dd></div>
+    <div><dt>${tr("keys_fire")}</dt><dd>${tr("touch_fire")}</dd></div>
+    <div><dt>${tr("keys_aim")}</dt><dd>${tr("touch_aim")}</dd></div>
+    <div><dt>${tr("keys_reload")}</dt><dd>${tr("touch_reload")}</dd></div>
+    <div><dt>${tr("keys_jump")}</dt><dd>${tr("touch_jump")}</dd></div>
+    <div><dt>${tr("keys_cut")}</dt><dd>${tr("touch_cut")}</dd></div>
+    <div><dt>${tr("keys_sprint")}</dt><dd>${tr("touch_sprint")}</dd></div>
+  </dl>`;
+  }
   function pM(i, e) {
-    let t = document.getElementById("ui"),
+    let uiRoot = document.getElementById("ui"),
       n = YC(),
       s = document.createElement("div");
     (s.className = "menu"),
@@ -36558,85 +36649,87 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
 
     <section class="m-screen m-title" data-s="title" aria-label="Saltline">
       <div class="m-title-main">
-        <div class="m-eyebrow"><span class="m-tag">B4</span><span>Port Authority Breach Unit</span><span class="m-dim">Saltline Terminal \xB7 05:42</span></div>
+        <div class="m-eyebrow"><span class="m-tag">B4</span><span data-i18n="title_eyebrow_unit"></span><span class="m-dim" data-i18n="title_eyebrow_place"></span></div>
         <h1 class="m-word">SALTLINE</h1>
-        <p class="m-premise">The port\u2019s security net has gone feral. Cut its three uplinks. Reach the boat.</p>
+        <p class="m-premise" data-i18n="title_premise"></p>
         <div class="m-actions">
-          <button class="btn primary" data-act="deploy">Deploy</button>
-          <button class="btn" data-act="settings">Settings</button>
-          <button class="btn m-only-narrow" data-act="controls">Controls</button>
+          <button class="btn primary" data-act="deploy" data-i18n="title_deploy"></button>
+          <button class="btn" data-act="settings" data-i18n="title_settings"></button>
+          <button class="btn m-only-narrow" data-act="controls" data-i18n="title_controls"></button>
         </div>
-        <p class="m-note">Every surface, machine and sound is generated in your browser. Nothing is downloaded.</p>
+        <p class="m-note" data-i18n="title_note"></p>
       </div>
-      <aside class="m-legend" aria-label="Controls at a glance">
-        <div><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move</span><span><kbd>Mouse</kbd> Look</span><span><kbd>LMB</kbd> Fire</span><span><kbd>RMB</kbd> Aim</span><span><kbd>R</kbd> Reload</span></div>
-        <div><span><kbd>E</kbd> Cut relay</span><span><kbd>Space</kbd> Jump</span><span><kbd>Shift</kbd> Sprint</span><span><kbd>C</kbd> Crouch</span><span><kbd>Esc</kbd> Pause</span></div>
-        <div class="lg-touch"><em>Touch</em><span>Left thumb moves</span><span>Right thumb looks</span><span>Fire \xB7 Aim \xB7 Reload \xB7 Jump on screen</span></div>
+      <aside class="m-legend" data-i18n-aria="legend_aria">
+        <div><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <i data-i18n="legend_move"></i></span><span><kbd>Mouse</kbd> <i data-i18n="legend_look"></i></span><span><kbd>LMB</kbd> <i data-i18n="legend_fire"></i></span><span><kbd>RMB</kbd> <i data-i18n="legend_aim"></i></span><span><kbd>R</kbd> <i data-i18n="legend_reload"></i></span></div>
+        <div><span><kbd>E</kbd> <i data-i18n="legend_cut"></i></span><span><kbd>Space</kbd> <i data-i18n="legend_jump"></i></span><span><kbd>Shift</kbd> <i data-i18n="legend_sprint"></i></span><span><kbd>C</kbd> <i data-i18n="legend_crouch"></i></span><span><kbd>Esc</kbd> <i data-i18n="legend_pause"></i></span></div>
+        <div class="lg-touch"><em data-i18n="legend_touch"></em><span data-i18n="legend_touch_move"></span><span data-i18n="legend_touch_look"></span><span data-i18n="legend_touch_btns"></span></div>
       </aside>
     </section>
 
-    <section class="m-screen m-card" data-s="paused" aria-label="Paused">
-      <div class="m-k">Operation on hold</div>
-      <h2 class="m-h">Paused</h2>
+    <section class="m-screen m-card" data-s="paused" data-i18n-aria="paused_h">
+      <div class="m-k" data-i18n="paused_k"></div>
+      <h2 class="m-h" data-i18n="paused_h"></h2>
       <p class="m-line" data-f="lookmode"></p>
       <div class="m-actions col">
-        <button class="btn primary" data-act="resume">Resume</button>
-        <button class="btn" data-act="settings">Settings</button>
-        <button class="btn" data-act="controls">Controls</button>
-        <button class="btn" data-act="restart">Restart mission</button>
+        <button class="btn primary" data-act="resume" data-i18n="paused_resume"></button>
+        <button class="btn" data-act="settings" data-i18n="title_settings"></button>
+        <button class="btn" data-act="controls" data-i18n="title_controls"></button>
+        <button class="btn" data-act="restart" data-i18n="paused_restart"></button>
       </div>
     </section>
 
-    <section class="m-screen m-card m-dead" data-s="dead" aria-label="Signal lost">
-      <div class="m-k">Breacher down</div>
-      <h2 class="m-h">Signal lost</h2>
-      <dl class="m-stats"><div><dt>Time survived</dt><dd data-f="dead-time">00:00</dd></div><div><dt>Relays cut</dt><dd data-f="dead-relays">0/3</dd></div></dl>
-      <div class="m-actions col"><button class="btn primary" data-act="retry">Retry</button></div>
+    <section class="m-screen m-card m-dead" data-s="dead" data-i18n-aria="dead_h">
+      <div class="m-k" data-i18n="dead_k"></div>
+      <h2 class="m-h" data-i18n="dead_h"></h2>
+      <dl class="m-stats"><div><dt data-i18n="dead_time"></dt><dd data-f="dead-time">00:00</dd></div><div><dt data-i18n="dead_relays"></dt><dd data-f="dead-relays">0/3</dd></div></dl>
+      <div class="m-actions col"><button class="btn primary" data-act="retry" data-i18n="dead_retry"></button></div>
     </section>
 
-    <section class="m-screen m-card m-debrief" data-s="complete" aria-label="Debrief">
-      <div class="m-k">Berth 4 \xB7 Debrief</div>
-      <h2 class="m-h">Saltline is dark</h2>
-      <div class="m-rating"><span>Rating</span><b data-f="rating">Clean</b></div>
+    <section class="m-screen m-card m-debrief" data-s="complete" data-i18n-aria="debrief_h">
+      <div class="m-k" data-i18n="debrief_k"></div>
+      <h2 class="m-h" data-i18n="debrief_h"></h2>
+      <div class="m-rating"><span data-i18n="debrief_rating"></span><b data-f="rating"></b></div>
       <dl class="m-stats">
-        <div><dt>Time</dt><dd data-f="time">00:00</dd></div>
-        <div><dt>Accuracy</dt><dd data-f="acc">0%</dd></div>
-        <div><dt>Machines destroyed</dt><dd data-f="kills">0</dd></div>
-        <div><dt>Retries</dt><dd data-f="retries">0</dd></div>
+        <div><dt data-i18n="debrief_time"></dt><dd data-f="time">00:00</dd></div>
+        <div><dt data-i18n="debrief_acc"></dt><dd data-f="acc">0%</dd></div>
+        <div><dt data-i18n="debrief_kills"></dt><dd data-f="kills">0</dd></div>
+        <div><dt data-i18n="debrief_retries"></dt><dd data-f="retries">0</dd></div>
       </dl>
-      <div class="m-actions col"><button class="btn primary" data-act="redeploy">Redeploy</button></div>
+      <div class="m-actions col"><button class="btn primary" data-act="redeploy" data-i18n="debrief_redeploy"></button></div>
     </section>
 
-    <div class="panel" role="dialog" aria-modal="true" aria-label="Settings and controls" tabindex="-1" hidden>
+    <div class="panel" role="dialog" aria-modal="true" data-i18n-aria="panel_aria" tabindex="-1" hidden>
       <header class="panel-h">
         <div class="tabs" role="tablist">
-          <button class="tab" role="tab" data-tab="settings" aria-selected="true">Settings</button>
-          <button class="tab" role="tab" data-tab="controls" aria-selected="false">Controls</button>
+          <button class="tab" role="tab" data-tab="settings" aria-selected="true" data-i18n="panel_settings"></button>
+          <button class="tab" role="tab" data-tab="controls" aria-selected="false" data-i18n="panel_controls"></button>
         </div>
-        <button class="btn small" data-act="close-panel">Close</button>
+        <button class="btn small" data-act="close-panel" data-i18n="panel_close"></button>
       </header>
       <div class="panel-b" data-pane="settings">
-        <div class="row"><label id="l-q">Graphics quality</label>
-          <div class="seg" role="group" aria-labelledby="l-q">${dM.map((U) => `<button data-q="${U}" aria-pressed="false">${U}</button>`).join("")}</div></div>
-        <div class="row"><label for="s-sens">Mouse sensitivity</label><div class="slider"><input id="s-sens" type="range" min="0.2" max="3" step="0.05"><output data-o="sens"></output></div></div>
-        <div class="row"><label id="l-inv">Invert Y</label><button class="toggle" data-act="invert" aria-labelledby="l-inv" aria-pressed="false"><i></i><span>Off</span></button></div>
-        <div class="row"><label for="s-vol">Master volume</label><div class="slider"><input id="s-vol" type="range" min="0" max="100" step="1"><output data-o="vol"></output></div></div>
-        <div class="row"><label for="s-fov">Field of view</label><div class="slider"><input id="s-fov" type="range" min="60" max="95" step="1"><output data-o="fov"></output></div></div>
-        <div class="row" data-row="fs"><label id="l-fs">Display</label><button class="btn small" data-act="fullscreen" aria-labelledby="l-fs fs-t"><span id="fs-t">Enter fullscreen</span></button></div>
+        <div class="row"><label id="l-lang" data-i18n="set_lang"></label>
+          <div class="seg lang" role="group" aria-labelledby="l-lang">${LANGS.map((L) => `<button data-lang="${L.id}" aria-pressed="false">${L.label}</button>`).join("")}</div></div>
+        <div class="row"><label id="l-q" data-i18n="set_quality"></label>
+          <div class="seg" role="group" aria-labelledby="l-q">${dM.map((U) => `<button data-q="${U}" aria-pressed="false">${tr("q_" + U)}</button>`).join("")}</div></div>
+        <div class="row"><label for="s-sens" data-i18n="set_sens"></label><div class="slider"><input id="s-sens" type="range" min="0.2" max="3" step="0.05"><output data-o="sens"></output></div></div>
+        <div class="row"><label id="l-inv" data-i18n="set_invert"></label><button class="toggle" data-act="invert" aria-labelledby="l-inv" aria-pressed="false"><i></i><span>Off</span></button></div>
+        <div class="row"><label for="s-vol" data-i18n="set_volume"></label><div class="slider"><input id="s-vol" type="range" min="0" max="100" step="1"><output data-o="vol"></output></div></div>
+        <div class="row"><label for="s-fov" data-i18n="set_fov"></label><div class="slider"><input id="s-fov" type="range" min="60" max="95" step="1"><output data-o="fov"></output></div></div>
+        <div class="row" data-row="fs"><label id="l-fs" data-i18n="set_display"></label><button class="btn small" data-act="fullscreen" aria-labelledby="l-fs fs-t"><span id="fs-t"></span></button></div>
         <p class="panel-note" data-f="qnote"></p>
       </div>
       <div class="panel-b" data-pane="controls" hidden>
-        <h3>Keyboard \xB7 Mouse</h3>${$C}
-        <p class="panel-note">If the browser will not capture the mouse, hold a mouse button and drag to look (left also fires, right also aims). Arrow keys or <kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> turn, <kbd>Enter</kbd> fires.</p>
-        <h3>Touch</h3>${ZC}
-        <h3>Gamepad</h3>
-        <p class="panel-note">Sticks move and look \xB7 RT fire \xB7 LT aim \xB7 A jump \xB7 B crouch \xB7 X reload \xB7 Y cut relay \xB7 L3 sprint \xB7 Start pause.</p>
+        <h3 data-i18n="kb_mouse"></h3><div data-keys="kb"></div>
+        <p class="panel-note" data-i18n="mouse_note"></p>
+        <h3 data-i18n="legend_touch"></h3><div data-keys="touch"></div>
+        <h3 data-i18n="gamepad"></h3>
+        <p class="panel-note" data-i18n="gamepad_note"></p>
       </div>
     </div>
 
-    <div class="loc-card" aria-hidden="true"><i></i><b>Saltline Terminal \xB7 Berth 4 \xB7 05:42</b><span>Port Authority Breach Unit \u2014 one breacher, no backup</span></div>
+    <div class="loc-card" aria-hidden="true"><i></i><b data-i18n="loc_card"></b><span data-i18n="loc_card_sub"></span></div>
   `),
-      t.appendChild(s);
+      uiRoot.appendChild(s);
     let o = (U) => s.querySelector(U),
       r = (U) => [...s.querySelectorAll(U)],
       a = o(".panel"),
@@ -36647,6 +36740,26 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       f = o("#s-fov"),
       p = "none",
       d = null;
+
+    // Rebuild every translated string in the menu. Called on load and whenever
+    // the player switches language in Settings.
+    function R() {
+      applyI18n(s);
+      let kb = o('[data-keys="kb"]'),
+        tc = o('[data-keys="touch"]');
+      if (kb) kb.innerHTML = keysKb();
+      if (tc) tc.innerHTML = keysTouch();
+      for (let L of r(".seg [data-q]")) L.textContent = tr("q_" + L.dataset.q);
+      let inv = o('[data-act="invert"]');
+      inv && (inv.querySelector("span").textContent = n.invertY ? tr("set_on") : tr("set_off"));
+      y.textContent = b() ? tr("set_exit_fullscreen") : tr("set_fullscreen");
+      g();
+      Lc();
+    }
+    function Lc() {
+      for (let L of r("[data-lang]"))
+        L.setAttribute("aria-pressed", String(L.dataset.lang === getLang()));
+    }
     function v(U) {
       if (
         ((!U || U === "sens") && (i.input.sensitivity = n.sens),
@@ -36683,7 +36796,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     }
     function g() {
       let U = n.quality === "auto" ? i.quality && i.quality.name : n.quality;
-      for (let D of r(".seg button"))
+      for (let D of r(".seg [data-q]"))
         D.setAttribute("aria-pressed", String(D.dataset.q === U));
       (u.value = n.sens),
         (h.value = Math.round(n.volume * 100)),
@@ -36693,11 +36806,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         (o('[data-o="fov"]').textContent = Math.round(n.fov) + "\xB0");
       let T = o('[data-act="invert"]');
       T.setAttribute("aria-pressed", String(n.invertY)),
-        (T.querySelector("span").textContent = n.invertY ? "On" : "Off"),
+        (T.querySelector("span").textContent = n.invertY ? tr("set_on") : tr("set_off")),
         (c("qnote").textContent =
           n.quality === "auto"
-            ? `Quality was picked for this device (${U || "default"}). Lower it if the frame rate struggles.`
-            : "Quality changes apply at once; shadows and reflections may take a moment to rebuild.");
+            ? tr("qnote_auto", { q: U ? tr("q_" + U) : tr("q_medium") })
+            : tr("qnote_manual"));
     }
     u.addEventListener("input", () => {
       (n.sens = +u.value), v("sens"), g(), Wf(n);
@@ -36719,7 +36832,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       document.webkitFullscreenEnabled !== !1) ||
       (x.hidden = !0);
     function _() {
-      y.textContent = "Fullscreen is not available here";
+      y.textContent = tr("set_fs_unavailable");
     }
     function M() {
       try {
@@ -36736,7 +36849,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       }
     }
     let E = () => {
-      y.textContent = b() ? "Exit fullscreen" : "Enter fullscreen";
+      y.textContent = b() ? tr("set_exit_fullscreen") : tr("set_fullscreen");
     };
     document.addEventListener("fullscreenchange", E),
       document.addEventListener("webkitfullscreenchange", E);
@@ -36772,7 +36885,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     s.addEventListener("click", (U) => {
       let T = U.target.closest("button");
       if (!T || !s.contains(T)) return;
-      if ((i.events.emit("ui:click", {}), T.dataset.q)) {
+      if ((i.events.emit("ui:click", {}), T.dataset.lang)) {
+        setLang(T.dataset.lang), Wf(n), R();
+        i.events.emit("lang:change", { lang: getLang() });
+        return;
+      }
+      if (T.dataset.q) {
         (n.quality = T.dataset.q), v("quality"), g(), Wf(n);
         return;
       }
@@ -36865,10 +36983,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
               T == null ? "\u2014" : Math.round(T * 100) + "%"),
             (c("kills").textContent = String(D)),
             (c("retries").textContent = String(C)),
-            (c("rating").textContent = G);
+            (c("rating").textContent = G == null ? "" : tr("rating_" + G));
         },
         applySettings: v,
+        relabel: R,
       };
+    R();
     return g(), q;
   }
   var Yi = {
@@ -36892,28 +37012,17 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       titleSpeed: 1.15,
       titleFov: 50,
     },
-    jC = [
-      "NORTH",
-      "NORTH-EAST",
-      "EAST",
-      "SOUTH-EAST",
-      "SOUTH",
-      "SOUTH-WEST",
-      "WEST",
-      "NORTH-WEST",
-    ],
-    _l = {
-      intro:
-        "Breacher, this is Control. The Harbormaster holds the berth. Cut its three uplinks \u2014 yard, shed, quay.",
-      contact: "It has seen you. Gulls fly, Hounds walk. Put them down.",
-      cut: [
-        "One relay dark. It felt that \u2014 machines inbound.",
-        "Two dark. It is throwing everything it has left at you.",
-      ],
-      all: "All three dark. The boat is holding at the quay ladder, south end. Run.",
-      low: "You are hit hard. Get behind steel and breathe.",
-      done: "Breacher is aboard. Saltline is dark. Good work.",
-    };
+    jC = ["dir_n", "dir_ne", "dir_e", "dir_se", "dir_s", "dir_sw", "dir_w", "dir_nw"],
+    _l = new Proxy(
+      {},
+      {
+        get(_, k) {
+          if (k === "cut")
+            return [tr("radio_cut1"), tr("radio_cut2")];
+          return tr("radio_" + String(k));
+        },
+      },
+    );
   function mM(i) {
     let e = (i.render && i.render.post) || {},
       t = typeof e.saturation == "number" ? e.saturation : 1,
@@ -36965,6 +37074,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         pursuitLeft: 0,
         contactSaid: !1,
         lowSaid: !1,
+        citySaid: !1,
         extractHint: 0,
         intensity: 0.15,
         used: new Map(),
@@ -36999,6 +37109,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         debugCut() {
           let P = c.relays.find((V) => !V.cut);
           P && me(P);
+        },
+        refreshLabels() {
+          l.relabel && l.relabel();
+          o.relabel && o.relabel();
+          _.state === "playing" && o.setObjective && o.setObjective(D());
+          i.level && i.level.refreshLabels && i.level.refreshLabels();
         },
       };
     function M(P) {
@@ -37088,6 +37204,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         (c.pursuitLeft = 0),
         (c.contactSaid = !1),
         (c.lowSaid = !1),
+        (c.citySaid = !1),
         (c.extractHint = 0),
         c.used.clear(),
         (c.relays = A().map((P, V) => {
@@ -37130,7 +37247,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         .map((V) => ({
           id: V.id,
           short: V.short,
-          label: V.o.label || "Relay " + V.short,
+          label: tr("relay", { short: V.short }),
           pos: V.o.pos,
           kind: "relay",
         }));
@@ -37139,7 +37256,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         P.push({
           id: "extract",
           short: "EX",
-          label: "Boat",
+          label: tr("boat"),
           pos: s.extraction.pos,
           kind: "extract",
         }),
@@ -37178,13 +37295,13 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         C(!0);
     }
     function D() {
-      if (c.allCut) return "Get to the boat";
+      if (c.allCut) return tr("obj_boat");
       let P = c.relays.length - c.cut;
       return c.cut === 0
-        ? "Cut the three uplink relays"
+        ? tr("obj_three")
         : P === 1
-          ? "Cut the last relay"
-          : `Cut the remaining ${P} relays`;
+          ? tr("obj_last")
+          : tr("obj_remaining", { n: P });
     }
     function C(P) {
       let V = r.describeMode ? r.describeMode() : "";
@@ -37228,7 +37345,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             ? r.describeMode()
             : r.touch
               ? ""
-              : "Resume recaptures the mouse.",
+              : tr("resume_hint"),
         ),
         o.show(!1),
         l.show("paused"),
@@ -37249,8 +37366,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     function N(P) {
       let V = P === "gull" ? "air" : "ground",
         Y = (s && s.enemySpawns) || [],
-        L = Y.filter((Z) => Z.type === V);
-      return L.length ? L : Y;
+        L = Y.filter(
+          (Z) =>
+            Z.type === V &&
+            Math.hypot(Z.pos.x - n.pos.x, Z.pos.z - n.pos.z) < 70,
+        );
+      return L;
     }
     function Q(
       P,
@@ -37336,7 +37457,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       }),
         (c.waveHot = 30);
       let J = ((Math.atan2(L, -Z) * 180) / Math.PI + 360) % 360;
-      o.warn && o.warn("Contact \u2014 " + jC[Math.round(J / 45) % 8], 3.4);
+      o.warn &&
+        o.warn(
+          tr("contact", { dir: tr(jC[Math.round(J / 45) % 8]) }),
+          3.4,
+        );
     }
     function X(P) {
       let V = ne();
@@ -37406,7 +37531,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         c.alertT = Math.max(c.alertT, 8);
       }),
       i.events.on("player:rescued", () => {
-        _.state === "playing" && o.message("Hauled out of the water", 2.5);
+        _.state === "playing" && o.message(tr("rescued"), 2.5);
       });
     function $() {
       let P = null,
@@ -37445,7 +37570,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
                 O(L.o, "live"),
                 i.events.emit("objective:progress", { id: L.id, t: 0 }))));
       V && !V.cut
-        ? o.setPrompt && o.setPrompt("Cut relay " + V.short, Fo(V.t))
+        ? o.setPrompt && o.setPrompt(tr("relay_cut_prompt", { short: V.short }), Fo(V.t))
         : o.setPrompt && o.setPrompt(null);
       let Y = s.extraction;
       if (Y && Y.pos) {
@@ -37457,10 +37582,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             !c.allCut &&
             c.extractHint <= 0 &&
             ((c.extractHint = 8),
-            o.message(
-              "Relays still live \u2014 the boat will not wait under fire",
-              3.5,
-            )),
+            o.message(tr("relays_live"), 3.5)),
           (c.extractHint = Math.max(0, c.extractHint - P));
       }
     }
@@ -37509,13 +37631,13 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           (c.time < 270 ? 2 : c.time < 400 ? 1 : 0) +
           (V >= 0.5 ? 2 : V >= 0.3 ? 1 : 0) +
           (c.retries === 0 ? 1 : 0),
-        L = ["Messy", "Loud", "Steady", "Clean", "Sharp", "Surgical"][Y];
+        L = Y;
       l.setDebrief({
         time: c.time,
         accuracy: V,
         kills: P.kills || 0,
         retries: c.retries,
-        rating: L,
+        rating: Y,
       }),
         M("complete");
     }
@@ -37573,6 +37695,15 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
               n.alive &&
               n.health < 30 &&
               ((c.lowSaid = !0), o.radio && o.radio(_l.low, 3)),
+            // Crossing the fence line opens the endless city. Say it once.
+            !c.citySaid &&
+              i.city &&
+              i.city.outside &&
+              n.alive &&
+              ((c.citySaid = !0),
+              o.radio && o.radio(_l.city, 5),
+              o.message && o.message(tr("city_enter"), 4),
+              i.events.emit("city:enter", {})),
             !0
           );
         }
@@ -37631,6 +37762,10 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
   var vM = document.getElementById("boot"),
     xM = document.getElementById("boot-msg"),
     yM = document.getElementById("boot-fill");
+  try {
+    document.title = getLang() === "zh" ? "盐线 · SALTLINE" : "Saltline";
+    xM && (xM.textContent = tr("boot_raising"));
+  } catch {}
   function bM(i) {
     (window.__fatal = String(i)), console.error("[fatal] " + i);
     let e = document.getElementById("fatal");
@@ -37638,7 +37773,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       ((e = document.createElement("div")),
       (e.id = "fatal"),
       document.getElementById("app").appendChild(e)),
-      (e.textContent = "Saltline could not start: " + i);
+      (e.textContent = tr("boot_fatal") + i);
   }
   window.addEventListener("error", (i) => {
     window.__errors.push(String(i.message));
@@ -37708,13 +37843,13 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       g > 150 && console.log(`[boot] ${h} ${g.toFixed(0)}ms`);
     }
     if (
-      (await Nr("Waking the renderer", 0.04),
+      (await Nr(tr("boot_renderer"), 0.04),
       await r("render", "render", () => Hg(t), !0),
       (t.renderer = t.render.renderer),
       (t.scene = t.render.scene),
       (t.camera = t.render.camera),
       (t.viewCamera = t.render.viewCamera),
-      await Nr("Mixing paint, rust and rain", 0.12),
+      await Nr(tr("boot_materials"), 0.12),
       await r("mats", "materials", () => Gg(t)),
       (t.physics = d3(t)),
       (t.props = Yg(t)),
@@ -37769,11 +37904,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           o({ cam: [...f.cam, ...(f.target || [0, 1, 0])].join(",") });
     } else {
       if (
-        (await Nr("Stacking containers", 0.34),
+        (await Nr(tr("boot_containers"), 0.34),
         await r("level", "level", () => C1(t), !0),
-        await Nr("Raising the cranes", 0.5),
+        await Nr(tr("boot_cranes"), 0.5),
         await r("backdrop", "backdrop", () => pv(t)),
-        await Nr("Flooding the apron", 0.58),
+        await Nr(tr("boot_apron"), 0.58),
         await r("ground", "ground", () => O1(t)),
         t.ground.stub)
       ) {
@@ -37785,19 +37920,32 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         t.scene.add(h);
       }
       t.physics.build(),
-        await Nr("Loading tracers and smoke", 0.66),
+        await Nr(tr("boot_city"), 0.62),
+        i.nocity
+          ? (t.city = dr.city())
+          : await r("city", "city", () => createCity(t), !0),
+        t.city &&
+          t.city.update(0, (t.player && t.player.pos) || { x: -32, y: 0, z: 6 }),
+        await Nr(tr("boot_tracers"), 0.66),
         await r("fx", "fx", () => Cf(t)),
         await r("audio", "audio", () => (i.noaudio ? dr.audio() : c_(t))),
         (t.player = x_(t)),
         (t.combat = zv(t)),
-        await Nr("Checking the rifle", 0.74),
+        await Nr(tr("boot_rifle"), 0.74),
         await r("weapon", "weapon", () => dm(t)),
-        await Nr("Waking the Harbormaster", 0.82),
+        await Nr(tr("boot_harbormaster"), 0.82),
         await r("enemies", "enemies", () => Em(t)),
         await r("hud", "hud", () => hM(t)),
-        (t.game = mM(t));
+        (t.game = mM(t)),
+        t.events.on("lang:change", () => {
+          try {
+            t.game.refreshLabels && t.game.refreshLabels();
+          } catch (h) {
+            console.error("[i18n] relabel failed", h);
+          }
+        });
     }
-    await Nr("Waiting for first light", 0.92);
+    await Nr(tr("boot_light"), 0.92);
     try {
       await t.render.onLevelReady();
     } catch (h) {
@@ -37823,7 +37971,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       }
     i.noweapon && t.weapon.setVisible && t.weapon.setVisible(!1),
       e && eP(t),
-      await Nr("Ready", 1),
+      await Nr(tr("boot_ready"), 1),
       vM.classList.add("done"),
       setTimeout(() => {
         vM.hidden = !0;
@@ -37906,6 +38054,8 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           u("level", p),
           u("backdrop", p),
           u("mats", p)),
+          t.city &&
+            t.city.update(p, t.player && t.player.pos ? t.player.pos : t.camera.position),
           u("audio", p),
           u("hud", p),
           s && (t.camera.position.copy(s.pos), t.camera.lookAt(s.look)),

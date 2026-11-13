@@ -14,6 +14,40 @@
       href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;900&family=IBM+Plex+Mono:wght@400;500&family=Barlow+Condensed:wght@400;500;600&display=swap"
     />
     <link rel="stylesheet" href="css/game.css" />
+    <script>
+      // Pick the language before first paint so the boot screen is not
+      // re-labelled mid-load. Mirrors js/i18n.js detect().
+      (function () {
+        var L = null;
+        try {
+          var q = new URLSearchParams(location.search).get("lang");
+          if (q) L = /^zh/i.test(q) ? "zh" : /^en/i.test(q) ? "en" : null;
+        } catch (e) {}
+        if (!L) {
+          try {
+            var s = localStorage.getItem("saltline.lang.v1");
+            if (s === "zh" || s === "en") L = s;
+          } catch (e) {}
+        }
+        if (!L) {
+          var list =
+            navigator.languages && navigator.languages.length
+              ? navigator.languages
+              : [navigator.language || "en"];
+          for (var i = 0; i < list.length; i++) {
+            if (/^zh\b|^zh-/i.test(String(list[i]))) {
+              L = "zh";
+              break;
+            }
+          }
+        }
+        L = L || "en";
+        document.documentElement.lang = L === "zh" ? "zh-CN" : "en";
+        document.documentElement.dataset.lang = L;
+        window.__SALTLINE_LANG = L;
+        if (L === "zh") document.title = "盐线";
+      })();
+    </script>
   </head>
   <body>
     <div id="app">
