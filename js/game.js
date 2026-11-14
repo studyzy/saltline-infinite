@@ -37353,6 +37353,8 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       });
     function leaveMP() {
       c.mp = !1;
+      a(i.weapon, "setVisible", !1);
+      (n.alive = !0), (n.enabled = !1);
       try {
         i.net && i.net.disconnect && i.net.disconnect();
       } catch {}
@@ -37409,6 +37411,8 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           c.mp = !0;
           H();
           a(i.enemies, "clear");
+          a(i.weapon, "setVisible", !0);
+          (n.alive = !0), (n.enabled = !0);
           l.show("none");
           l.locationCard(!1);
           a(i.audio, "setPaused", !1);

@@ -157,6 +157,8 @@ export class NetClient {
             ammo: msg.self.ammo,
             reserve: msg.self.reserve,
           });
+        if (this.game.weapon && this.game.weapon.setVisible)
+          this.game.weapon.setVisible(msg.self.state === "alive");
         break;
       case "ev":
         this.onEvent(msg);
@@ -282,6 +284,8 @@ export class NetClient {
       case "match":
         if (payload.state === "won" || payload.state === "lost") {
           this.active = false;
+          if (this.game.weapon && this.game.weapon.setVisible)
+            this.game.weapon.setVisible(false);
           this.ui.clearHud();
           this.ui.hideHud();
           if (this.game.game && this.game.game.multiplayerEnd)
