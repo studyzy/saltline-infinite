@@ -112,6 +112,17 @@ server.on("upgrade", (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => manager.handle(ws));
 });
 
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${port} is already in use. Stop the process holding it, or start with a different port:\n  PORT=8732 npm start`,
+    );
+  } else {
+    console.error(err);
+  }
+  process.exit(1);
+});
+
 server.listen(port, host, () => {
   console.log(`Saltline server on http://localhost:${port} (build ${readBuild()})`);
 });

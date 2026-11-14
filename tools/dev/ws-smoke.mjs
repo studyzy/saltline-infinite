@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { createRoomWorld } from "../../server/world.js";
 
 const world = createRoomWorld();
-const url = "ws://localhost:8732/ws";
+const url = `ws://localhost:${process.env.PORT || 8731}/ws`;
 
 function client(name, room) {
   const ws = new WebSocket(url);
