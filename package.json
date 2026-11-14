@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test",
+    "test": "node --test test/shared/*.test.js test/integration/*.test.js",
     "export:colliders": "node tools/export-port-colliders.mjs"
   },
   "dependencies": {

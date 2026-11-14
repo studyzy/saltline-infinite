@@ -8,6 +8,7 @@ import { buildSnapshot } from "./snapshot.js";
 import { Bus } from "./bus.js";
 import { createEnemySim, Director, makeFacade } from "./enemies.js";
 import { resolveShot } from "./combat.js";
+import { DropDirector } from "./drops.js";
 import { createPlayerState, step } from "../shared/player.js";
 import {
   encode,
@@ -76,11 +77,13 @@ export class Room {
     this.enemies = null;
     this.enemyGame = null;
     this.director = null;
+    this.dropDirector = new DropDirector(this);
     this.facades = [];
     this.relays = [];
     this.cutCount = 0;
     this.allCut = false;
     this.history = [];
+    this.waitTimer = null;
     this.bindEnemyEvents();
     this.enemySnapshot = () =>
       this.enemies
@@ -109,6 +112,7 @@ export class Room {
         progress: Math.round(r.progress * 1000) / 1000,
         cut: r.cut,
       }));
+    this.dropSnapshot = (player) => this.dropDirector.snapshot(player);
     this.timer = setInterval(() => this.step(), 1000 / TICK_RATE);
     if (this.timer.unref) this.timer.unref();
   }
@@ -230,6 +234,14 @@ export class Room {
     player.connected = true;
     player.inputs.length = 0;
     this.emptySince = 0;
+    clearTimeout(this.waitTimer);
+    this.waitTimer = null;
+    if (
+      this.state === "waiting" &&
+      this.players.every((p) => p.connected)
+    ) {
+      this.state = "playing";
+    }
     return player;
   }
 
@@ -307,6 +319,7 @@ export class Room {
     this.extractT = 0;
     this.threat = 0;
     this.history.length = 0;
+    this.dropDirector.reset();
     for (const p of this.players) {
       const pos = this.spawnFor(p.id);
       p.state.pos.copy(pos);
@@ -364,6 +377,8 @@ export class Room {
         }
       }
       if (this.director) this.director.update(DT);
+      this.updateDowned(DT);
+      this.dropDirector.update(DT);
       this.updateRelays(DT);
       this.updateExtraction(DT);
       this.recordHistory();
@@ -391,6 +406,11 @@ export class Room {
       applied++;
       if (Date.now() - input.receivedAt > 500) {
         player.lastAck = Math.max(player.lastAck, input.seq);
+        continue;
+      }
+      if (player.downed || !player.state.alive) {
+        player.lastAck = Math.max(player.lastAck, input.seq);
+        player.lastBtn = 0;
         continue;
       }
       const firing = this.time - player.lastFireAt < 0.25;
@@ -470,7 +490,8 @@ export class Room {
 
   processFires() {
     for (const p of this.players) {
-      if (!p.connected || !p.fireQueue || !p.fireQueue.length) continue;
+      if (!p.connected || p.downed || !p.state.alive) continue;
+      if (!p.fireQueue || !p.fireQueue.length) continue;
       while (p.fireQueue.length) {
         const fire = p.fireQueue.shift();
         if (this.time - p.lastFireAt < WEAPON.shotInterval * 0.9) continue;
@@ -527,7 +548,7 @@ export class Room {
   }
 
   damagePlayer(player, amount, from) {
-    if (!player.state.alive || this.state !== "playing") return;
+    if (!player.state.alive || player.downed || this.state !== "playing") return;
     if (!(amount > 0)) return;
     player.state.health = Math.max(0, player.state.health - amount);
     this.event("hurt", {
@@ -536,14 +557,79 @@ export class Room {
       from: from ? [from.x, from.y, from.z] : null,
     });
     if (player.state.health <= 0) {
-      player.state.alive = false;
+      player.downed = true;
+      player.downT = MATCH.bleedoutSeconds;
+      player.reviveT = 0;
       player.state.enabled = false;
       player.state.vel.set(0, 0, 0);
-      this.event("died", { playerId: player.id });
+      this.event("downed", {
+        playerId: player.id,
+        downT: MATCH.bleedoutSeconds,
+      });
       if (
-        !this.players.some((p) => p.connected && p.state.alive && !p.downed)
+        !this.players.some(
+          (p) => p.connected && p.state.alive && !p.downed,
+        )
       )
         this.finish(false);
+    }
+  }
+
+  updateDowned(dt) {
+    for (const player of this.players) {
+      if (!player.downed) continue;
+      player.downT -= dt;
+      if (player.downT <= 0) {
+        player.downed = false;
+        player.state.alive = false;
+        player.state.enabled = false;
+        this.event("died", { playerId: player.id });
+        if (
+          !this.players.some(
+            (p) => p.connected && p.state.alive && !p.downed,
+          )
+        )
+          this.finish(false);
+        continue;
+      }
+      let rescuer = null;
+      for (const other of this.players) {
+        if (other === player || !other.connected) continue;
+        if (!other.state.alive || other.downed) continue;
+        if (!(other.lastBtn & BTN.INTERACT)) continue;
+        const d = Math.hypot(
+          other.state.pos.x - player.state.pos.x,
+          other.state.pos.z - player.state.pos.z,
+        );
+        if (d > MATCH.reviveRange) continue;
+        if (other.state.speed > 0.6) continue;
+        if (this.time - other.lastFireAt < 0.2) continue;
+        rescuer = other;
+        break;
+      }
+      if (rescuer)
+        player.reviveT = Math.min(
+          1,
+          player.reviveT + dt / MATCH.reviveSeconds,
+        );
+      else
+        player.reviveT = Math.max(
+          0,
+          player.reviveT -
+            (dt / MATCH.reviveSeconds) * MATCH.reviveDecay,
+        );
+      if (player.reviveT >= 1) {
+        player.downed = false;
+        player.downT = 0;
+        player.reviveT = 0;
+        player.state.alive = true;
+        player.state.health = MATCH.reviveHealth;
+        player.state.enabled = true;
+        this.event("revived", {
+          playerId: player.id,
+          by: rescuer.id,
+        });
+      }
     }
   }
 
@@ -640,6 +726,8 @@ export class Room {
 
   finish(won) {
     if (this.state !== "playing" && this.state !== "countdown") return;
+    clearTimeout(this.waitTimer);
+    this.waitTimer = null;
     this.state = won ? "won" : "lost";
     this.event("match", { state: this.state });
   }
@@ -667,18 +755,30 @@ export class Room {
     if (!any) this.emptySince = Date.now();
     else this.emptySince = 0;
     if (!connected && this.state === "playing") {
-      this.state = "disbanded";
-      this.broadcast({
-        t: "ev",
-        id: this.eventId++,
-        k: "match",
-        state: "disbanded",
+      this.state = "waiting";
+      this.event("peer", {
+        state: "left",
+        playerId: player.id,
+        timeoutMs: MATCH.disconnectGraceSeconds * 1000,
       });
+      this.event("match", { state: "waiting" });
+      clearTimeout(this.waitTimer);
+      this.waitTimer = setTimeout(
+        () => this.disband(),
+        MATCH.disconnectGraceSeconds * 1000,
+      );
     }
+  }
+
+  disband() {
+    if (this.state === "disbanded" || this.disposed) return;
+    this.state = "disbanded";
+    this.event("match", { state: "disbanded" });
   }
 
   dispose() {
     this.disposed = true;
+    clearTimeout(this.waitTimer);
     clearInterval(this.timer);
     if (this.enemies) {
       try {
@@ -795,6 +895,10 @@ export class RoomManager {
           conn.player = player;
           conn.token = msg.reconnect;
           this.sendWelcome(conn, player, room, msg.reconnect, true);
+          if (room.state === "playing") {
+            room.event("peer", { state: "back", playerId: player.id });
+            room.event("match", { state: "playing" });
+          }
           return;
         }
       }

@@ -29012,6 +29012,7 @@ void main() {
       }
     }
     function netTick(F) {
+      if (i.net && i.net.spectate) return;
       let X = i.input,
         ne = i.weapon || {},
         viewAds =
@@ -29019,7 +29020,7 @@ void main() {
             ? (O = kn(O, C.enabled && X.ads ? 1 : 0, 14, F))
             : Fo(ne.ads);
       C.lookScale = bi(1, Mt.adsLook, viewAds);
-      if (C.enabled && C.alive) {
+      if (C.alive) {
         (C.yaw -= X.look.dx * C.lookScale),
           (C.pitch = Zn(
             C.pitch - X.look.dy * C.lookScale,
@@ -37325,27 +37326,39 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           a(i.audio, "resume"), r.requestLock(), U({});
         },
         resume() {
+          if (c.mp && i.net && i.net.waiting) return;
           j(!0);
         },
         coop() {
           i.net && i.net.openUI();
         },
         restart() {
+          if (c.mp) return leaveMP();
           a(i.audio, "resume"),
             r.requestLock(),
             c.retries++,
             U({ quick: !0, keepRetries: !0 });
         },
         retry() {
+          if (c.mp) return leaveMP();
           a(i.audio, "resume"),
             r.requestLock(),
             c.retries++,
             U({ quick: !0, keepRetries: !0 });
         },
         redeploy() {
+          if (c.mp) return leaveMP();
           a(i.audio, "resume"), r.requestLock(), U({ quick: !0 });
         },
       });
+    function leaveMP() {
+      c.mp = !1;
+      try {
+        i.net && i.net.disconnect && i.net.disconnect();
+      } catch {}
+      l.show("title");
+      M("title");
+    }
     l.applySettings();
     let c = {
         time: 0,
@@ -38433,7 +38446,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             (u("player", p),
             u("weapon", p),
             u("enemies", p),
-            u("cityLife", p),
+            !(t.net && t.net.active) && u("cityLife", p),
             t.net && u("net", p));
         if (
           t.weapon &&

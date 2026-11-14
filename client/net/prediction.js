@@ -30,8 +30,13 @@ export class Prediction {
 
     if (typeof self.hp === "number") player.health = self.hp;
     if (typeof self.med === "number") player.medkits = self.med;
-    if (typeof self.state === "string") player.alive = self.state !== "dead";
+    if (typeof self.state === "string") {
+      player.alive = self.state !== "dead";
+      player.downed = self.state === "downed";
+      player.enabled = self.state === "alive";
+    }
     if (typeof self.downT === "number") player.downT = self.downT;
+    if (typeof self.revive === "number") player.reviveT = self.revive;
 
     const dx = player.pos.x - self.pos[0];
     const dy = player.pos.y - self.pos[1];

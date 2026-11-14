@@ -35,6 +35,36 @@ export class NetUI {
         <button class="mp-btn mp-close" data-i18n="mp_close"></button>
       </section>`;
     document.getElementById("ui").appendChild(root);
+    const hud = document.createElement("div");
+    hud.className = "mp-hud";
+    hud.innerHTML = `
+      <div class="mp-team" hidden>
+        <span class="mp-team-name" data-i18n="mp_teammate"></span>
+        <b class="mp-team-hp">100</b>
+        <i class="mp-team-bar"><em></em></i>
+      </div>
+      <div class="mp-notice" hidden></div>
+      <div class="mp-net"><i></i><span class="mp-net-rtt">—</span></div>
+      <div class="mp-downed" hidden>
+        <div class="mp-downed-k" data-i18n="mp_downed"></div>
+        <b class="mp-downed-t">45</b>
+        <span class="mp-downed-s" data-i18n="mp_revive_wait"></span>
+        <div class="mp-revive"><i></i></div>
+      </div>`;
+    document.getElementById("ui").appendChild(hud);
+    this.hud = hud;
+    hud.hidden = true;
+    this.teamEl = hud.querySelector(".mp-team");
+    this.teamHp = hud.querySelector(".mp-team-hp");
+    this.teamBar = hud.querySelector(".mp-team-bar em");
+    this.noticeEl = hud.querySelector(".mp-notice");
+    this.netEl = hud.querySelector(".mp-net");
+    this.netRtt = hud.querySelector(".mp-net-rtt");
+    this.downedEl = hud.querySelector(".mp-downed");
+    this.downedT = hud.querySelector(".mp-downed-t");
+    this.downedS = hud.querySelector(".mp-downed-s");
+    this.reviveBar = hud.querySelector(".mp-revive i");
+    this.noticeKey = "";
     this.root = root;
     this.input = root.querySelector(".mp-code");
     this.connectBtn = root.querySelector(".mp-connect");
@@ -64,8 +94,65 @@ export class NetUI {
 
     this.net.game.events.on("lang:change", () => {
       applyI18n(this.root);
+      applyI18n(this.hud);
       this.renderStatus();
+      if (this.noticeKey) this.notice(this.noticeKey);
     });
+  }
+
+  updateHud(snap) {
+    if (!snap) return;
+    const self = snap.self || {};
+    if (self.state === "downed") {
+      this.downedEl.hidden = false;
+      this.downedT.textContent = Math.max(0, Math.ceil(self.downT || 0));
+      this.downedS.textContent =
+        self.revive > 0 ? tr("mp_revive_doing") : tr("mp_revive_wait");
+      this.reviveBar.style.width = `${Math.round((self.revive || 0) * 100)}%`;
+    } else {
+      this.downedEl.hidden = true;
+    }
+    const other = (snap.players || [])[0];
+    if (other) {
+      this.teamEl.hidden = false;
+      this.teamHp.textContent = Math.max(0, Math.round(other.hp));
+      this.teamBar.style.width = `${Math.max(0, Math.min(100, other.hp))}%`;
+      this.teamEl.classList.toggle("down", other.state === "downed");
+      this.teamEl.classList.toggle("dead", other.state === "dead");
+    } else {
+      this.teamEl.hidden = true;
+    }
+  }
+
+  notice(key, vars = null) {
+    this.noticeKey = key;
+    this.noticeEl.hidden = false;
+    this.noticeEl.textContent = tr(key, vars);
+  }
+
+  clearNotice() {
+    this.noticeKey = "";
+    this.noticeEl.hidden = true;
+  }
+
+  setNet(rtt, quality) {
+    if (!this.netEl) return;
+    this.netRtt.textContent = Number.isFinite(rtt) ? `${Math.round(rtt)} ms` : "—";
+    this.netEl.dataset.q = quality || "ok";
+  }
+
+  clearHud() {
+    this.downedEl.hidden = true;
+    this.teamEl.hidden = true;
+    this.clearNotice();
+  }
+
+  showHud() {
+    this.hud.hidden = false;
+  }
+
+  hideHud() {
+    this.hud.hidden = true;
   }
 
   show() {

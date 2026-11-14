@@ -11,6 +11,7 @@ import { Vector3 } from "../../shared/three.js";
 import { computeWorldHashes } from "./world-hash.js";
 import { Prediction } from "./prediction.js";
 import { Interpolator } from "./interpolation.js";
+import { Drops } from "./drops.js";
 import { NetUI } from "./ui.js";
 
 const TOKEN_KEY = "saltline.mp.session.v1";
@@ -27,6 +28,7 @@ export class NetClient {
     this.token = "";
     this.prediction = new Prediction(game);
     this.interp = new Interpolator(game);
+    this.drops = new Drops(game);
     this.ui = new NetUI(this);
     this.seq = 0;
     this.sendAcc = 0;
@@ -34,6 +36,14 @@ export class NetClient {
     this.pending = 0;
     this.rtt = 0;
     this.lastSnap = null;
+    try {
+      this.lagMs = Math.max(
+        0,
+        Number(new URLSearchParams(location.search).get("netlag")) || 0,
+      );
+    } catch {
+      this.lagMs = 0;
+    }
   }
 
   openUI() {
@@ -41,7 +51,11 @@ export class NetClient {
   }
 
   connect(roomCode) {
+    this.intentional = false;
+    this.reconnectTries = this.reconnectTries || 0;
+    clearTimeout(this.reconnectTimer);
     this.disconnect();
+    this.intentional = false;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/ws`;
     const ws = new WebSocket(url);
@@ -62,7 +76,9 @@ export class NetClient {
   }
 
   disconnect() {
+    this.intentional = true;
     clearTimeout(this.startTimer);
+    clearTimeout(this.reconnectTimer);
     if (this.ws) {
       try {
         this.ws.close(1000, "bye");
@@ -72,9 +88,18 @@ export class NetClient {
     this.active = false;
     this.prediction.reset();
     this.interp.reset();
+    this.drops.reset();
   }
 
   onMessage(raw) {
+    if (this.lagMs) {
+      setTimeout(() => this.handleMessage(raw), this.lagMs);
+      return;
+    }
+    this.handleMessage(raw);
+  }
+
+  handleMessage(raw) {
     let msg;
     try {
       msg = decode(typeof raw === "string" ? raw : "");
@@ -87,6 +112,7 @@ export class NetClient {
         this.playerId = msg.playerId || 0;
         this.room = msg.room || "";
         this.resumed = !!msg.resumed;
+        this.reconnectTries = 0;
         try {
           sessionStorage.setItem(
             TOKEN_KEY,
@@ -114,6 +140,9 @@ export class NetClient {
         this.lastSnap = msg;
         this.prediction.onSnapshot(msg.self);
         this.interp.push(msg);
+        this.drops.apply(msg.drops);
+        this.spectate = msg.self.state === "dead";
+        this.ui.updateHud(msg);
         if (this.game.weapon && this.game.weapon.setNetworkState)
           this.game.weapon.setNetworkState({
             ammo: msg.self.ammo,
@@ -137,12 +166,23 @@ export class NetClient {
     if (this.started) {
       this.active = true;
       this.ui.hide();
+      this.ui.clearNotice();
+      this.ui.showHud();
+      if (this.game.game && this.game.game.state === "paused")
+        try {
+          this.game.game.resume();
+        } catch {}
       return;
     }
     this.started = true;
     this.active = true;
+    this.spectate = false;
+    this.reconnectTries = 0;
     this.prediction.reset();
     this.interp.reset();
+    this.drops.reset();
+    this.ui.clearHud();
+    this.ui.showHud();
     try {
       this.game.audio && this.game.audio.resume && this.game.audio.resume();
     } catch {}
@@ -196,6 +236,12 @@ export class NetClient {
       case "shot":
         this.onShot(payload);
         break;
+      case "drop":
+        this.drops.apply([payload]);
+        break;
+      case "dropTaken":
+        this.drops.remove(payload.id);
+        break;
       case "hurt":
         if (payload.playerId === this.playerId) {
           const p = this.game.player;
@@ -206,13 +252,51 @@ export class NetClient {
           });
         }
         break;
+      case "downed":
+        if (payload.playerId === this.playerId)
+          this.ui.notice("mp_revive_wait");
+        else this.ui.notice("mp_team_downed");
+        break;
+      case "revived":
+        this.ui.clearNotice();
+        break;
+      case "died":
+        if (payload.playerId === this.playerId) {
+          this.spectate = true;
+          this.ui.notice("mp_spectate");
+        }
+        break;
+      case "peer":
+        if (payload.state === "left") this.ui.notice("mp_peer_left");
+        else if (payload.state === "back") this.ui.clearNotice();
+        break;
       case "match":
         if (payload.state === "won" || payload.state === "lost") {
           this.active = false;
+          this.ui.clearHud();
+          this.ui.hideHud();
           if (this.game.game && this.game.game.multiplayerEnd)
             this.game.game.multiplayerEnd(payload.state === "won");
-        } else if (payload.state === "disbanded") {
+        } else if (payload.state === "waiting") {
+          this.waiting = true;
           this.active = false;
+          try {
+            this.game.game && this.game.game.pause && this.game.game.pause();
+          } catch {}
+          this.ui.notice("mp_peer_left");
+        } else if (payload.state === "playing") {
+          if (this.waiting) {
+            this.waiting = false;
+            this.active = true;
+            try {
+              this.game.game && this.game.game.resume && this.game.game.resume();
+            } catch {}
+            this.ui.clearNotice();
+          }
+        } else if (payload.state === "disbanded") {
+          this.intentional = true;
+          this.active = false;
+          if (this.ui.connectBtn) this.ui.connectBtn.disabled = false;
           this.ui.setStatus("mp_err_closed", null, "error");
           this.ui.show();
         }
@@ -271,6 +355,22 @@ export class NetClient {
   update(dt) {
     if (!this.active || !this.ws || this.ws.readyState !== 1) return;
     this.interp.update(dt);
+    this.netAcc = (this.netAcc || 0) + dt;
+    if (this.netAcc >= 1) {
+      this.netAcc = 0;
+      const rtt = this.rtt || 0;
+      this.ui.setNet(rtt, rtt > 200 ? "bad" : rtt > 90 ? "warn" : "ok");
+    }
+
+    if (this.spectate && this.lastSnap && this.lastSnap.players[0]) {
+      const p = this.lastSnap.players[0];
+      const cam = this.game.camera;
+      if (cam) {
+        cam.position.set(p.pos[0], p.pos[1] + 1.62, p.pos[2]);
+        cam.rotation.set(p.pitch || 0, p.yaw || 0, 0, "YXZ");
+      }
+      return;
+    }
 
     const input = this.game.input;
     if (!input) return;
@@ -317,12 +417,16 @@ export class NetClient {
 
   send(msg) {
     if (!this.ws || this.ws.readyState !== 1) return false;
-    try {
-      this.ws.send(encode(msg));
-      return true;
-    } catch {
-      return false;
-    }
+    const ws = this.ws;
+    const write = () => {
+      if (ws.readyState !== 1) return;
+      try {
+        ws.send(encode(msg));
+      } catch {}
+    };
+    if (this.lagMs) setTimeout(write, this.lagMs);
+    else write();
+    return true;
   }
 
   onClose() {
@@ -333,5 +437,15 @@ export class NetClient {
     if (this.ui.connectBtn) this.ui.connectBtn.disabled = false;
     if (this.ui.root && this.ui.root.hidden)
       this.ui.setStatus("mp_err_closed", null, "error");
+    if (!this.intentional && this.started && this.room) {
+      if (!this.reconnectTries) {
+        this.reconnectTries = 1;
+        this.ui.notice("mp_peer_left");
+        try {
+          this.game.game && this.game.game.pause && this.game.game.pause();
+        } catch {}
+        this.reconnectTimer = setTimeout(() => this.connect(this.room), 2000);
+      }
+    }
   }
 }

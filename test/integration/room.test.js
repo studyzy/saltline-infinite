@@ -185,4 +185,20 @@ test("two clients join, move, and see each other", async (t) => {
   );
   const afterFire = a.snaps[a.snaps.length - 1];
   assert.ok(afterFire.self.ammo < 30, `ammo ${afterFire.self.ammo}`);
+
+  // A disconnect pauses the room and a token reconnect resumes it.
+  const token = b.welcome.token;
+  b.ws.close();
+  await new Promise((r) => setTimeout(r, 400));
+  assert.ok(a.events.some((e) => e.k === "peer" && e.state === "left"));
+  assert.ok(a.events.some((e) => e.k === "match" && e.state === "waiting"));
+
+  const b2 = client(port);
+  t.after(() => b2.ws.close());
+  await open(b2.ws);
+  send(b2.ws, { t: "hello", v: 1, build: "test", reconnect: token });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.ok(b2.welcome, "reconnect accepted");
+  assert.ok(a.events.some((e) => e.k === "peer" && e.state === "back"));
+  assert.ok(a.events.some((e) => e.k === "match" && e.state === "playing"));
 });
