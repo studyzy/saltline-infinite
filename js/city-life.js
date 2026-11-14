@@ -18,42 +18,9 @@
 import * as THREE from "./vendor/three.module.js";
 import { t as tr } from "./i18n.js";
 import { CITY_GRID } from "./city.js";
+import { CITY_LIFE as TUNE } from "../shared/constants.js";
 
 const { RESERVED, CELL } = CITY_GRID;
-
-const TUNE = {
-  // rifle magazines
-  magRounds: 30,
-  magMax: 5,
-  magEvery: 3.4,
-  magNear: 9,
-  magFar: 42,
-  magKeep: 78,
-  magGap: 6,
-  magTake: 1.8,
-  // medkits
-  medMax: 2,
-  medEvery: 9,
-  medNear: 10,
-  medFar: 40,
-  medKeep: 78,
-  medGap: 8,
-  medTake: 1.8,
-  // loot dropped by a wreck
-  lootAmmo: 30,
-  lootKeep: 120,
-  lootTake: 1.8,
-  lootScatter: 1.4,
-  // block encounters
-  packBase: 2, // machines in the first blocks outside the fence
-  packRamp: 150, // one extra machine per this many metres from spawn
-  packMax: 6,
-  packNear: 12, // spawn ring inside the block
-  packFar: 32,
-  packGap: 4, // keep pack members from stacking on one spot
-  enemyKeep: 95, // a pack left this far behind is retired
-  aliveMax: 10, // total city machines alive at once
-};
 
 // The port is not city: never spawn inside the fixed level, and never east of
 // the quay where the city stops and the harbour water begins.

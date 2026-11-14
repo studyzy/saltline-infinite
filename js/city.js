@@ -163,10 +163,11 @@ function merge(list) {
 
 // ------------------------------------------------------------------ city ---
 
-export function createCity(game) {
+export function createCity(game, options = {}) {
   const scene = game.scene;
   const physics = game.physics;
   const mats = game.mats;
+  const collideOnly = !!options.collideOnly;
 
   const root = new THREE.Group();
   root.name = "city";
@@ -837,6 +838,7 @@ export function createCity(game) {
       gc.push(geo);
     };
     const boxes = planColliders(plan);
+    if (collideOnly) return { geos: null, boxes, gc: [] };
     const solid = (name, w, h, d, x, y, z, opts = {}) => {
       const ry = opts.ry || 0;
       push(name, placed(boxGeo(w, h, d), x, y, z, ry));
@@ -1006,10 +1008,17 @@ export function createCity(game) {
   // Both are collidered, so there is no radius beyond which you can walk
   // through the city — only one beyond which it stops being pretty up close.
   const DETAIL_RING = 1;
-  let originCell = { x: 0, z: 0 };
+  let focusCells = [{ x: 0, z: 0 }];
+  let lastFocusKey = "";
 
   function detailFor(cx, cz) {
-    return Math.max(Math.abs(cx - originCell.x), Math.abs(cz - originCell.z)) <= DETAIL_RING ? 2 : 1;
+    if (collideOnly) return 1;
+    let best = Infinity;
+    for (const f of focusCells) {
+      const ring = Math.max(Math.abs(cx - f.x), Math.abs(cz - f.z));
+      if (ring < best) best = ring;
+    }
+    return best <= DETAIL_RING ? 2 : 1;
   }
 
   function addNear(cx, cz) {
@@ -1020,8 +1029,10 @@ export function createCity(game) {
     nearCells.set(key, cell);
     cell.detail = detailFor(cx, cz);
     const data = buildNear(cx, cz, cell.detail);
-    cell.group = buildCellGroup(data.geos, cityMat, true);
-    root.add(cell.group);
+    if (!collideOnly) {
+      cell.group = buildCellGroup(data.geos, cityMat, true);
+      root.add(cell.group);
+    }
     for (const b of data.boxes) {
       cell.boxRefs.push(physics.addBox(b.min, b.max, { surface: b.surface, tag: "city" }));
     }
@@ -1116,15 +1127,16 @@ export function createCity(game) {
   let wantFar = new Set();
   let queued = 0;
 
-  let farAnchor = null;
-  function plan(ccx, ccz) {
-    const w = wanted(ccx, ccz);
-    wantNear = w.near;
-    // widen the horizon window a little before rebuilding it
-    if (!farAnchor || Math.abs(ccx - farAnchor.x) >= 2 || Math.abs(ccz - farAnchor.z) >= 2) {
-      farAnchor = { x: ccx, z: ccz };
-      wantFar = w.far;
+  function plan(foci) {
+    const near = new Set();
+    const far = new Set();
+    for (const f of foci) {
+      const w = wanted(f.x, f.z);
+      for (const key of w.near) near.add(key);
+      if (!collideOnly) for (const key of w.far) far.add(key);
     }
+    wantNear = near;
+    wantFar = far;
     for (const key of [...nearCells.keys()]) if (!wantNear.has(key)) removeNear(key);
     for (const key of [...farSet]) if (!wantFar.has(key.slice(1))) removeFar(key);
     // Queue what is missing, nearest first so the visible ring fills in first.
@@ -1134,7 +1146,14 @@ export function createCity(game) {
     for (const key of wantFar) if (!farSet.has("f" + key)) missing.push(key);
     const d = (key) => {
       const [cx, cz] = key.split(",").map(Number);
-      return (cx - ccx) ** 2 + (cz - ccz) ** 2;
+      let best = Infinity;
+      for (const f of foci) {
+        const dx = cx - f.x;
+        const dz = cz - f.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < best) best = d2;
+      }
+      return best;
     };
     missing.sort((a, b) => d(a) - d(b));
     for (const key of missing) {
@@ -1162,6 +1181,7 @@ export function createCity(game) {
     // visible hitch every time the player crossed a cell line. It now runs only
     // if the near-field queue finished and this frame still has budget left.
     if (
+      !collideOnly &&
       farDirty &&
       pending.length === 0 &&
       performance.now() - lastFarBuild > 1100 &&
@@ -1170,6 +1190,22 @@ export function createCity(game) {
       lastFarBuild = performance.now();
       rebuildFarBatch();
     }
+  }
+
+  // Server-side helper: build every queued near block now instead of spreading
+  // the work across frames, so a player never reaches a street with no
+  // collision yet.
+  function flush() {
+    while (pending.length) {
+      const job = pending.shift();
+      if (job.far) {
+        if (wantFar.has(job.cx + "," + job.cz)) addFar(job.cx, job.cz);
+      } else if (wantNear.has(job.cx + "," + job.cz)) {
+        addNear(job.cx, job.cz);
+      }
+    }
+    queued = 0;
+    if (!collideOnly) rebuildFarBatch();
   }
 
   // ---- shadow follow -----------------------------------------------------
@@ -1242,15 +1278,22 @@ export function createCity(game) {
     get outside() {
       return !!lastCell && !inPort(lastCell.x, lastCell.z);
     },
-    update(dt, playerPos) {
-      if (!playerPos || !Number.isFinite(playerPos.x) || !Number.isFinite(playerPos.z)) return;
-      lastCell = { x: playerPos.x, z: playerPos.z };
-      const cx = Math.round(playerPos.x / CELL);
-      const cz = Math.round(playerPos.z / CELL);
-      if (!api._c || api._c.x !== cx || api._c.z !== cz) {
-        api._c = { x: cx, z: cz };
-        originCell = { x: cx, z: cz };
-        plan(cx, cz);
+    update(dt, focus) {
+      const list = Array.isArray(focus) ? focus : [focus];
+      const cells = [];
+      let first = null;
+      for (const p of list) {
+        if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) continue;
+        if (!first) first = p;
+        cells.push({ x: Math.round(p.x / CELL), z: Math.round(p.z / CELL) });
+      }
+      if (!cells.length) return;
+      lastCell = { x: first.x, z: first.z };
+      focusCells = cells;
+      const key = cells.map((c) => c.x + "," + c.z).join("|");
+      if (key !== lastFocusKey) {
+        lastFocusKey = key;
+        plan(cells);
       }
       // A block that is now close enough to deserve full detail is rebuilt.
       // Cheap to test, and it only ever fires for the handful of blocks that
@@ -1264,8 +1307,10 @@ export function createCity(game) {
         break;
       }
       pump();
-      setShadowFollow(!inPort(playerPos.x, playerPos.z), playerPos.x, playerPos.z);
+      if (!collideOnly)
+        setShadowFollow(!inPort(first.x, first.z), first.x, first.z);
     },
+    flush,
     // A spawn point for the pursuit waves: open ground 22-34 m out, behind the
     // player's back where possible. `seed` (0..1) rotates the candidate order
     // so repeated waves scatter instead of stacking on one square metre.

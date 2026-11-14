@@ -7,6 +7,8 @@ import * as THREE from './vendor/three.module.js';
 import { t as tr, getLang, setLang, applyI18n, LANGS } from './i18n.js';
 import { createCity } from './city.js';
 import { createCityLife } from './city-life.js';
+import { VIEW, MOVE, ENEMY_TUNE, MATCH, WEAPON, PHYSICS } from '../shared/constants.js';
+import { createPhysics } from '../shared/physics.js';
 
 const _M = Object.defineProperty;
 const br = (i, e) => {
@@ -107,9 +109,9 @@ const Zt = THREE.LinearFilter;
 var oi = {
       min: new W(-40, 0, -30),
       max: new W(40, 30, 30),
-      groundY: 0,
-      seaY: -1.6,
-      quayX: 30,
+      groundY: PHYSICS.groundY,
+      seaY: PHYSICS.seaY,
+      quayX: PHYSICS.quayX,
     },
     Mn = {
       dir: new W(0.916, 0.225, 0.331).normalize(),
@@ -122,14 +124,7 @@ var oi = {
       horizonAway: new Ve(0.16, 0.22, 0.3),
       fog: new Ve(0.42, 0.47, 0.52),
     },
-    Pi = {
-      eye: 1.68,
-      crouchEye: 1.05,
-      radius: 0.32,
-      height: 1.8,
-      fov: 74,
-      viewFov: 54,
-    },
+    Pi = VIEW,
     vf = 0,
     zc = 1,
     Pr = {
@@ -28798,46 +28793,7 @@ void main() {
     }
     return f;
   }
-  var Mt = {
-      walk: 3.8,
-      sprint: 6.4,
-      crouch: 1.9,
-      ads: 2.4,
-      accelGround: 34,
-      decelGround: 26,
-      accelAir: 9,
-      gravity: 21,
-      jumpApex: 1,
-      coyote: 0.12,
-      jumpBuffer: 0.13,
-      standHeight: Pi.height,
-      crouchHeight: 1.15,
-      eyeRate: 11,
-      stride: { walk: 1.55, sprint: 2.1, crouch: 1.05 },
-      bobY: 0.024,
-      bobX: 0.013,
-      bobSprint: 1.9,
-      bobAds: 0.22,
-      rollStrafe: 0.02,
-      landDip: 0.36,
-      landDipMax: 0.2,
-      fovSprint: 6,
-      fovAds: 52,
-      adsLook: 0.6,
-      regenDelay: 4,
-      regenRate: 25,
-      medkitHeal: 50,
-      medkitMax: 5,
-      recoilKeep: 0.35,
-      recoilApply: 34,
-      recoilRecover: 6.5,
-      recoilHold: 0.09,
-      shakeDecay: 1.7,
-      shakePitch: 0.03,
-      shakeYaw: 0.03,
-      shakeRoll: 0.045,
-      pitchLimit: 1.5,
-    },
+  var Mt = MOVE,
     rC = Math.sqrt(2 * Mt.gravity * Mt.jumpApex);
   function x_(i) {
     let e = i.camera,
@@ -31963,17 +31919,17 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
   }
   var gi = W,
     fm = Lt,
-    Gv = 30,
-    B_ = 150,
-    O_ = 720,
-    H_ = 26,
-    V_ = 300,
+    Gv = WEAPON.magSize,
+    B_ = WEAPON.reserve,
+    O_ = WEAPON.rpm,
+    H_ = WEAPON.damage,
+    V_ = WEAPON.range,
     eu = { p: [0.118, -0.122, -0.275], r: [0.034, 0.085, -0.03] },
     qv = { p: [0, -mi.sightY, -0.135], r: [0, 0, 0] },
     tu = { p: [-0.035, 0.004, 0.03], r: [-0.04, 0.62, 0.26] },
     nu = { p: [-0.03, 0.1, -0.02], r: [0.46, 0.22, -0.8] },
-    W_ = 2.1,
-    G_ = 2.72,
+    W_ = WEAPON.reloadSeconds,
+    G_ = WEAPON.emptyReloadSeconds,
     Yo = (i) => ((i = Fo(i)), i * i * i * (i * (6 * i - 15) + 10)),
     pa = (i, e) => ({ x: 0, v: 0, k: i, c: e });
   function ma(i, e, t) {
@@ -35468,24 +35424,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       sM(i, e, tM, s, o, r)
     );
   }
-  var Ui = {
-      gull: Zv,
-      hound: Kv,
-      sightRange: 45,
-      sightCone: 200,
-      loseSight: 4,
-      searchTime: 8,
-      hearRadius: 45,
-      maxTokens: 2,
-      maxTokensCrowd: 3,
-      tokenGap: 1.25,
-      exposureUp: 0.1,
-      exposureDown: 0.45,
-      poolGulls: 10,
-      poolHounds: 8,
-      maxWrecks: 5,
-      maxBolts: 32,
-    },
+  var Ui = ENEMY_TUNE,
     BC = Math.cos(((Ui.sightCone / 2) * Math.PI) / 180),
     oM = new W(),
     pz = new W(),
@@ -37111,27 +37050,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         .catch(() => {});
     }, 45e3);
   }
-  var Yi = {
-      introSeconds: 3.5,
-      retryIntroSeconds: 1.3,
-      interactRange: 2.2,
-      interactFacing: 0.45,
-      cutSeconds: 2.4,
-      patrol: { gull: 2, hound: 1 },
-      waves: [
-        { gull: 3, hound: 1 },
-        { gull: 3, hound: 2 },
-        { gull: 4, hound: 3 },
-      ],
-      maxAlive: 9,
-      spawnStagger: 0.85,
-      spawnFar: 18,
-      pursuitEvery: 7,
-      pursuitMinAlive: 4,
-      pursuitExtra: 5,
-      titleSpeed: 1.15,
-      titleFov: 50,
-    },
+  var Yi = MATCH,
     jC = ["dir_n", "dir_ne", "dir_e", "dir_se", "dir_s", "dir_sw", "dir_w", "dir_nw"],
     _l = new Proxy(
       {},
@@ -37884,19 +37803,28 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     props: $g,
     render: Vg,
   };
-  window.__frames = 0;
-  window.__ready = !1;
-  window.__fatal = null;
-  window.__errors = [];
-  var vM = document.getElementById("boot"),
-    xM = document.getElementById("boot-msg"),
+  if (typeof window !== "undefined") {
+    window.__frames = 0;
+    window.__ready = !1;
+    window.__fatal = null;
+    window.__errors = [];
+  }
+  var vM = null,
+    xM = null,
+    yM = null;
+  if (typeof document !== "undefined") {
+    vM = document.getElementById("boot");
+    xM = document.getElementById("boot-msg");
     yM = document.getElementById("boot-fill");
-  try {
-    document.title = getLang() === "zh" ? "盐线 · SALTLINE" : "Saltline";
-    xM && (xM.textContent = tr("boot_raising"));
-  } catch {}
+    try {
+      document.title = getLang() === "zh" ? "盐线 · SALTLINE" : "Saltline";
+      xM && (xM.textContent = tr("boot_raising"));
+    } catch {}
+  }
   function bM(i) {
-    (window.__fatal = String(i)), console.error("[fatal] " + i);
+    if (typeof window !== "undefined") window.__fatal = String(i);
+    console.error("[fatal] " + i);
+    if (typeof document === "undefined") return;
     let e = document.getElementById("fatal");
     e ||
       ((e = document.createElement("div")),
@@ -37904,22 +37832,24 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       document.getElementById("app").appendChild(e)),
       (e.textContent = tr("boot_fatal") + i);
   }
-  window.addEventListener("error", (i) => {
-    window.__errors.push(String(i.message));
-  });
-  {
-    let i = console.error.bind(console);
-    console.error = (...e) => {
-      try {
-        window.__errors.push(
-          e
-            .map((t) => (t && t.stack) || String(t))
-            .join(" ")
-            .slice(0, 400),
-        );
-      } catch {}
-      i(...e);
-    };
+  if (typeof window !== "undefined") {
+    window.addEventListener("error", (i) => {
+      window.__errors.push(String(i.message));
+    });
+    {
+      let i = console.error.bind(console);
+      console.error = (...e) => {
+        try {
+          window.__errors.push(
+            e
+              .map((t) => (t && t.stack) || String(t))
+              .join(" ")
+              .slice(0, 400),
+          );
+        } catch {}
+        i(...e);
+      };
+    }
   }
   var KC = () => new Promise((i) => setTimeout(i, 0));
   async function Nr(i, e) {
@@ -37980,7 +37910,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       (t.viewCamera = t.render.viewCamera),
       await Nr(tr("boot_materials"), 0.12),
       await r("mats", "materials", () => Gg(t)),
-      (t.physics = d3(t)),
+      (t.physics = createPhysics(t)),
       (t.props = Yg(t)),
       (t.input = n ? tP() : v_(t)),
       n)
@@ -38388,4 +38318,11 @@ errors ${window.__errors.length}${
       update() {},
     };
   }
+  // Exports for the headless tools. Keeping the boot behind a document guard
+// lets tools/export-port-colliders.mjs import the level builder in Node
+// without starting a renderer.
+export { C1 as buildPortLevel, Yg as createProps, il as createRng };
+
+if (typeof document !== "undefined") {
   QC().catch((i) => bM((i && i.stack) || i));
+}
