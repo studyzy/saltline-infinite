@@ -41,7 +41,32 @@ python3 -m http.server 8731
 
 Then open http://localhost:8731 and click the page to capture the mouse and start the sound.
 
+## Two-player co-op
+
+The single-player page still runs from any static server. Co-op needs the Node
+authority, which serves the same files and the WebSocket on one port:
+
+```sh
+npm install
+npm start            # http://localhost:8731
+```
+
+Open the page in two browsers, click **Co-op**, and use the same room code (or
+open `?room=ABCDE` directly). One player creates the room; the second joins it.
+
+- The server owns players, enemies, hitscan, relays, extraction, downed/revive,
+  supplies and the reconnect window (90 s).
+- The city is generated locally on both sides from the same coordinates; the
+  handshake compares collision hashes before the match starts.
+- `?netlag=120` on one client adds a fixed send/receive delay for testing.
+- `node --test test/shared/*.test.js test/integration/*.test.js` runs the
+  shared and headless integration tests.
+
 Files:
+
+- `shared/` — simulation, protocol, constants and the exported port colliders
+- `server/` — HTTP + WebSocket authority, rooms, enemies, combat and supplies
+- `client/net/` — handshake, prediction, interpolation, avatars and co-op HUD
 
 - `index.html` — markup shell (~1 KB)
 - `css/game.css` — all styles (~30 KB)

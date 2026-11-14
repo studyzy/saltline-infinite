@@ -5,7 +5,7 @@
 import { Scene, Vector3 } from "../shared/three.js";
 import { createEnemies, createRng } from "../js/game.js";
 import { stubMats, fxStub } from "./stub-mats.js";
-import { MATCH } from "../shared/constants.js";
+import { MATCH, CITY_LIFE } from "../shared/constants.js";
 
 export function makeFacade(room, player) {
   return {
@@ -54,6 +54,97 @@ export async function createEnemySim(room) {
   room.enemyGame = game;
   room.enemies = enemies;
   return { game, enemies };
+}
+
+export class CityDirector {
+  constructor(room) {
+    this.room = room;
+    this.rng = createRng((room.seed || 4207) + 71);
+    this.seen = new Set();
+    this.cool = 0;
+  }
+
+  reset() {
+    this.seen.clear();
+    this.cool = 0;
+  }
+
+  cityAlive() {
+    if (!this.room.enemies) return 0;
+    return this.room.enemies.list.filter((e) => e.city && e.alive).length;
+  }
+
+  update(dt) {
+    this.cool -= dt;
+    for (const p of this.room.players) {
+      if (!p.connected || !p.state.alive || p.downed) continue;
+      if (p.state.pos.x > -45) continue;
+      const key =
+        Math.round(p.state.pos.x / 40) + "," + Math.round(p.state.pos.z / 40);
+      if (this.seen.has(key)) continue;
+      this.seen.add(key);
+      if (this.cool > 0) continue;
+      this.spawnPack(p);
+      this.cool = 2;
+    }
+    this.retire();
+  }
+
+  spawnPack(player) {
+    const dist = Math.hypot(
+      player.state.pos.x + 32,
+      player.state.pos.z - 6,
+    );
+    const size = Math.max(
+      2,
+      Math.min(6, CITY_LIFE.packBase + Math.floor(dist / CITY_LIFE.packRamp)),
+    );
+    for (let i = 0; i < size; i++) {
+      if (this.cityAlive() >= CITY_LIFE.aliveMax) break;
+      const type = this.rng() < 0.6 ? "hound" : "gull";
+      let pos = null;
+      try {
+        pos = this.room.world.city.spawnPoint(
+          player.state.pos,
+          player.state.yaw,
+          this.rng(),
+        );
+      } catch {
+        pos = null;
+      }
+      if (!pos) break;
+      if (type === "gull") pos.y = 5.5 + this.rng() * 2.5;
+      else
+        pos.y = this.room.world.physics.groundHeight(pos.x, pos.z, pos.y + 2);
+      try {
+        const e = this.room.enemies.spawn(type, pos, { state: "alert" });
+        if (e) e.city = true;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  retire() {
+    if (!this.room.enemies) return;
+    for (const e of [...this.room.enemies.list]) {
+      if (!e.city || !e.alive) continue;
+      let near = false;
+      for (const p of this.room.players) {
+        if (!p.connected) continue;
+        if (
+          Math.hypot(
+            p.state.pos.x - e.pos.x,
+            p.state.pos.z - e.pos.z,
+          ) <= CITY_LIFE.enemyKeep
+        ) {
+          near = true;
+          break;
+        }
+      }
+      if (!near) this.room.enemies.retire(e);
+    }
+  }
 }
 
 export class Director {

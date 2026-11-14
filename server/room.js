@@ -6,7 +6,7 @@ import { createRoomWorld } from "./world.js";
 import { SessionStore } from "./session.js";
 import { buildSnapshot } from "./snapshot.js";
 import { Bus } from "./bus.js";
-import { createEnemySim, Director, makeFacade } from "./enemies.js";
+import { createEnemySim, Director, CityDirector, makeFacade } from "./enemies.js";
 import { resolveShot } from "./combat.js";
 import { DropDirector } from "./drops.js";
 import { createPlayerState, step } from "../shared/player.js";
@@ -77,6 +77,7 @@ export class Room {
     this.enemies = null;
     this.enemyGame = null;
     this.director = null;
+    this.cityDirector = new CityDirector(this);
     this.dropDirector = new DropDirector(this);
     this.facades = [];
     this.relays = [];
@@ -320,6 +321,8 @@ export class Room {
     this.threat = 0;
     this.history.length = 0;
     this.dropDirector.reset();
+    this.cityDirector.reset();
+    if (this.enemies) this.enemies.clear();
     for (const p of this.players) {
       const pos = this.spawnFor(p.id);
       p.state.pos.copy(pos);
@@ -377,6 +380,7 @@ export class Room {
         }
       }
       if (this.director) this.director.update(DT);
+      this.cityDirector.update(DT);
       this.updateDowned(DT);
       this.dropDirector.update(DT);
       this.updateRelays(DT);
