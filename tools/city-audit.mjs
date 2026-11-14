@@ -109,17 +109,27 @@ const note = (ok, msg) => {
 console.log("city audit");
 
 // ---- 1-3: per-position geometry checks -----------------------------------
-const POSITIONS = [[-160, 6], [-260, 60], [-360, -60], [-460, 140], [-560, -140]];
+const POSITIONS = [
+  [-50, 6], // the gate mouth: the first blocks outside the port fence
+  [-160, 6],
+  [-260, 60],
+  [-360, -60],
+  [-460, 140],
+  [-560, -140],
+];
 let containers = 0, overlaps = 0, sunk = 0, floating = 0, lodPairs = 0, lodBad = 0;
 const floatingSamples = [];
 for (const [px, pz] of POSITIONS) {
   const a = snapshot(px, pz);
   const cs = a.drawn.filter((d) => isContainer(d.mat));
   containers += cs.length;
-  // (1) solid: drop the capsule in the middle of each container
+  // (1) solid: drop the capsule in the middle of each container.
+  // moveCapsule takes a VELOCITY and applies dt itself, so pass metres per
+  // second, not a per-frame step: -1.5 m/s settles it far enough to be pushed
+  // out, and keeps the check honest.
   for (const c of cs) {
     const p = new THREE.Vector3((c.bb.min.x + c.bb.max.x) / 2, 0.2, (c.bb.min.z + c.bb.max.z) / 2);
-    for (let t = 0; t < 20; t++) a.moveCapsule(p, new THREE.Vector3(0, -0.15, 0), 1 / 60, 0.36, 1.8, true);
+    for (let t = 0; t < 20; t++) a.moveCapsule(p, new THREE.Vector3(0, -1.5, 0), 1 / 60, 0.36, 1.8, true);
     const still =
       p.x > c.bb.min.x + 0.05 && p.x < c.bb.max.x - 0.05 && p.z > c.bb.min.z + 0.05 && p.z < c.bb.max.z - 0.05 && p.y < c.bb.max.y - 0.3;
     if (still) fail.push(`container not solid at ${c.bb.min.x.toFixed(1)},${c.bb.min.z.toFixed(1)}`);
@@ -210,7 +220,10 @@ for (let w = 0; w < 8; w++) {
   let yaw = w * 1.1;
   for (let f = 0; f < 60 * 20; f++) {
     if (f % 90 === 0) yaw += 0.7;
-    const vel = new THREE.Vector3(Math.cos(yaw) * 7, -9.8 / 60, Math.sin(yaw) * 7);
+    // moveCapsule takes a velocity and multiplies by dt itself. Pre-multiplying
+    // dt here made the old walk test move at 12 cm/s, so it never actually
+    // reached a wall.
+    const vel = new THREE.Vector3(Math.cos(yaw) * 7, -9.8, Math.sin(yaw) * 7);
     s0.moveCapsule(pos, vel, 1 / 60, 0.36, 1.8, true);
     frames++;
     for (const b of s0.boxes) {

@@ -25,8 +25,12 @@ const ROAD = 9; // road strip on the west and south edge of a block
 const PAVE = 2.4; // pavement band around a lot
 const KERB = 0.14;
 
-// The fixed level's footprint plus a ring road: no city here.
-const RESERVED = { x0: -44, x1: 28, z0: -36, z1: 34 };
+// The fixed level's footprint: no city here. x0 is the west fence line, not
+// the old -44 ring road — the city's own pavement leaves a five metre verge
+// outside the fence, and testing the whole 40 m cell instead of its lot used
+// to push the first solid block another 40 m west, leaving a strip of static
+// backdrop scenery that the player could walk straight through.
+const RESERVED = { x0: -38, x1: 28, z0: -36, z1: 34 };
 // The apron mesh already supplies ground inside this rect; the city only adds
 // asphalt outside it so the port's puddle shader keeps working.
 const APRON = { x0: -160, x1: 30, z0: -160, z1: 160 };
@@ -185,6 +189,64 @@ export function createCity(game) {
     m.castShadow = false;
     m.frustumCulled = false;
     root.add(m);
+  }
+
+  // ---- the static backdrop ----------------------------------------------
+  //
+  // The fixed port ships with a decorative terminal west of the fence: one
+  // merged mesh (`skyline`) of container rows, sheds and cranes, built for the
+  // view from behind a closed gate. Opening the gate put it inside the map.
+  // It is scenery — every one of those containers is walk-through, and the
+  // generated blocks grow straight through the rows because both occupy the
+  // same ground. The endless city now owns everything west of the quay, so
+  // cut the backdrop back to the far shore once, at startup. What is left is
+  // only ever seen across the water, where the city never builds.
+  {
+    const KEEP_X = 24; // east of the city's build limit (wanted(): mx > 24)
+    // `skyline` is a group of merged meshes, `backdrop-lamps` is a mesh; clip
+    // every mesh under either name.
+    const meshes = [];
+    for (const name of ["skyline", "backdrop-lamps"]) {
+      const top = scene.getObjectByName(name);
+      if (top) top.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    }
+    for (const m of meshes) {
+      const g = m.geometry;
+      if (!g || !g.attributes.position) continue;
+      const src = g.index ? g.toNonIndexed() : g;
+      const pos = src.attributes.position;
+      const tris = Math.floor(pos.count / 3);
+      const keep = [];
+      for (let t = 0; t < tris; t++) {
+        const cx = (pos.getX(t * 3) + pos.getX(t * 3 + 1) + pos.getX(t * 3 + 2)) / 3;
+        if (cx >= KEEP_X) keep.push(t);
+      }
+      if (keep.length === tris) {
+        if (src !== g) m.geometry = src;
+        continue;
+      }
+      if (!keep.length) {
+        m.visible = false;
+        continue;
+      }
+      const out = new THREE.BufferGeometry();
+      for (const key of Object.keys(src.attributes)) {
+        const a = src.attributes[key];
+        const item = a.itemSize;
+        const arr = new Float32Array(keep.length * 3 * item);
+        let w = 0;
+        for (const t of keep)
+          for (let v = 0; v < 3; v++) {
+            const b = (t * 3 + v) * item;
+            for (let k = 0; k < item; k++) arr[w++] = a.array[b + k];
+          }
+        out.setAttribute(key, new THREE.BufferAttribute(arr, item));
+      }
+      out.computeBoundingSphere();
+      m.geometry = out;
+      if (src !== g) src.dispose();
+      g.dispose();
+    }
   }
 
   const nearCells = new Map(); // "cx,cz" -> { group, boxRefs }
@@ -1027,10 +1089,15 @@ export function createCity(game) {
         const cx = ccx + dx;
         const cz = ccz + dz;
         // Skip any block whose built lot would overlap the port itself, so the
-        // terminal is never built over and the gate opens onto a plaza.
-        const lx = cx * CELL + ROAD;
-        const lz = cz * CELL + ROAD;
-        if (lx < RESERVED.x1 && lx + CELL > RESERVED.x0 && lz < RESERVED.z1 && lz + CELL > RESERVED.z0) continue;
+        // terminal is never built over and the gate opens onto a street. The
+        // lot is smaller than the cell: checking the cell (the old lx..lx+CELL)
+        // rejected the block immediately west of the fence even though its
+        // buildings stop five metres short of it, which is why the gate opened
+        // onto a strip of non-solid backdrop instead of the city.
+        const lx = cx * CELL + ROAD + PAVE * 0.5 + 0.9;
+        const lz = cz * CELL + ROAD + PAVE * 0.5 + 0.9;
+        const ls = CELL - ROAD - PAVE * 1.5 - 1.8;
+        if (lx < RESERVED.x1 && lx + ls > RESERVED.x0 && lz < RESERVED.z1 && lz + ls > RESERVED.z0) continue;
         const mx = cx * CELL + CELL / 2;
         if (mx > 24) continue; // east of the quay is water
         const ring = Math.max(Math.abs(dx), Math.abs(dz));
