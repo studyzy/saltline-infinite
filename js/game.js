@@ -6,6 +6,7 @@
 import * as THREE from './vendor/three.module.js';
 import { t as tr, getLang, setLang, applyI18n, LANGS } from './i18n.js';
 import { createCity } from './city.js';
+import { createCityLife } from './city-life.js';
 
 const _M = Object.defineProperty;
 const br = (i, e) => {
@@ -27871,6 +27872,8 @@ void main() {
           (Z = Math.max(Z, pi(he / 40, 0.2, 0.7))),
           (Y = Math.min(1, Math.max(Y, 0.6) + 0.15));
       }),
+      ln("player:heal", () =>
+        ze("reload_magin", { gain: 0.4, pitch: 1.5 })),
       ln("player:dead", () => {
         e.currentTime - _e > 1 &&
           ((_e = e.currentTime), ze("death", { gain: 1, jitter: 0 })),
@@ -28323,6 +28326,7 @@ void main() {
       KeyE: "interact",
       KeyF: "melee",
       KeyV: "melee",
+      KeyH: "heal",
       Escape: "pause",
       KeyP: "pause",
       KeyQ: "alt",
@@ -28822,6 +28826,8 @@ void main() {
       adsLook: 0.6,
       regenDelay: 4,
       regenRate: 25,
+      medkitHeal: 50,
+      medkitMax: 5,
       recoilKeep: 0.35,
       recoilApply: 34,
       recoilRecover: 6.5,
@@ -28876,6 +28882,8 @@ void main() {
         pitch: 0,
         health: 100,
         maxHealth: 100,
+        medkits: 0,
+        medkitMax: Mt.medkitMax,
         alive: !0,
         onGround: !0,
         sprinting: !1,
@@ -28897,6 +28905,7 @@ void main() {
             (C.pitch = 0),
             C.vel.set(0, 0, 0),
             (C.health = C.maxHealth),
+            (C.medkits = 0),
             (C.alive = !0),
             (C.onGround = !0),
             (C.sprinting = !1),
@@ -28944,6 +28953,26 @@ void main() {
         },
         heal(F) {
           C.alive && (C.health = Math.min(C.maxHealth, C.health + F));
+        },
+        addMedkit(F = 1) {
+          let X = Math.max(0, Math.min(C.medkitMax, C.medkits + F));
+          let ne = X - C.medkits;
+          return (C.medkits = X), ne;
+        },
+        useMedkit() {
+          if (!C.alive || C.medkits <= 0 || C.health >= C.maxHealth - 0.5)
+            return !1;
+          let F = Math.min(Mt.medkitHeal, C.maxHealth - C.health);
+          return (
+            C.medkits--,
+            C.heal(F),
+            i.events.emit("player:heal", {
+              amount: F,
+              health: C.health,
+              left: C.medkits,
+            }),
+            !0
+          );
         },
         addRecoil(F = 0, X = 0) {
           let ne = Mt.recoilKeep;
@@ -29031,6 +29060,7 @@ void main() {
         return;
       }
       let re = C.enabled;
+      re && X.pressed("heal") && C.useMedkit();
       (C.lookScale = bi(1, Mt.adsLook, C.ads)),
         re &&
           ((C.yaw -= X.look.dx * C.lookScale),
@@ -34179,6 +34209,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
               Pn.explodeDamage,
               "enemy",
             ),
+          s.events.emit("enemy:crashed", {
+            enemy: d,
+            pos: d.pos,
+            type: "gull",
+          }),
           i.retire(d));
     }
     function x(y) {
@@ -35314,6 +35349,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         s.fx.sparks(ps, jv, 16),
         s.fx.debris(ps, { count: 4 }),
         s.events.emit("enemy:killed", { enemy: m, pos: m.pos, type: "hound" }),
+        s.events.emit("enemy:crashed", {
+          enemy: m,
+          pos: m.pos,
+          type: "hound",
+        }),
         i.addWreck(m);
     }
     function U(T) {
@@ -36095,10 +36135,14 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         "h-health",
         `<div class="h-k">${tr("hud_vitals")}</div><div class="h-hp-row"><b class="h-hp-n">100</b><div class="h-hp-bar">` +
           "<i></i>".repeat(10) +
-          "</div></div>",
+          `</div></div><div class="h-med"><span class="h-med-k">H</span><span class="h-med-l">${tr(
+            "hud_medkit",
+          )}</span><b class="h-med-n">0</b></div>`,
       ),
       z = S.querySelector(".h-hp-n"),
       H = [...S.querySelectorAll(".h-hp-bar i")],
+      medEl = S.querySelector(".h-med"),
+      medN = S.querySelector(".h-med-n"),
       O = li(
         "div",
         "h-ammo",
@@ -36111,6 +36155,10 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       C = O.querySelector(".h-cue"),
       G = li("div", "h-marks");
     hud.append(G, n, c, d, y, v, x, m, E, w, S, O), e.appendChild(hud);
+    medEl.addEventListener("pointerdown", (k) => {
+      k.preventDefault(), k.stopPropagation();
+      i.player && i.player.useMedkit && i.player.useMedkit();
+    });
     let j = li(
       "div",
       "comms",
@@ -36132,7 +36180,8 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         low: null,
         hp: -1,
         hpSeg: -1,
-        hurt: null,
+        med: -1,
+        vitalsOn: null,
         head: -1,
         tapeX: 1e9,
         gap: -1,
@@ -36203,6 +36252,14 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           ve.life < ce.life && (ce = ve);
         }
         ce.src.copy(k.fromPos), (ce.life = 1.5), (ce.max = 1.5);
+      }),
+      i.events.on("player:heal", (k) => {
+        let ce = Math.round((k && k.amount) || 0);
+        I.message(tr("hud_healed", { n: ce }), 1.4);
+        S.classList.remove("healed"),
+          void S.offsetWidth,
+          S.classList.add("healed"),
+          setTimeout(() => S.classList.remove("healed"), 520);
       });
     let I = {
       root: hud,
@@ -36353,10 +36410,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         let k = c.querySelector(".h-k"),
           ve = h.querySelector("span"),
           _e = j.querySelector(".comms-who"),
-          Te = S.querySelector(".h-k");
+          Te = S.querySelector(".h-k"),
+          mk = S.querySelector(".h-med-l");
         k && (k.textContent = tr("hud_objective")),
           ve && (ve.textContent = tr("hud_relays")),
           Te && (Te.textContent = tr("hud_vitals")),
+          mk && (mk.textContent = tr("hud_medkit")),
           _e && (_e.textContent = tr("hud_control")),
           (X.cue = null),
           (X.promptText = null);
@@ -36533,7 +36592,14 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           S.classList.toggle("crit", we <= 3);
         }
       }
-      Me !== X.hurt && ((X.hurt = Me), S.classList.toggle("on", Me));
+      let mk = Math.max(0, ce.medkits | 0);
+      mk !== X.med &&
+        ((X.med = mk),
+        (medN.textContent = String(mk)),
+        medEl.classList.toggle("has", mk > 0));
+      let vitalsOn = Me || mk > 0;
+      vitalsOn !== X.vitalsOn &&
+        ((X.vitalsOn = vitalsOn), S.classList.toggle("on", vitalsOn));
       for (let we of b) {
         if (we.life <= 0) {
           we.op !== 0 && ((we.op = 0), (we.el.style.opacity = "0"));
@@ -36665,7 +36731,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
       </div>
       <aside class="m-legend" data-i18n-aria="legend_aria">
         <div><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <i data-i18n="legend_move"></i></span><span><kbd>Mouse</kbd> <i data-i18n="legend_look"></i></span><span><kbd>LMB</kbd> <i data-i18n="legend_fire"></i></span><span><kbd>RMB</kbd> <i data-i18n="legend_aim"></i></span><span><kbd>R</kbd> <i data-i18n="legend_reload"></i></span></div>
-        <div><span><kbd>E</kbd> <i data-i18n="legend_cut"></i></span><span><kbd>Space</kbd> <i data-i18n="legend_jump"></i></span><span><kbd>Shift</kbd> <i data-i18n="legend_sprint"></i></span><span><kbd>C</kbd> <i data-i18n="legend_crouch"></i></span><span><kbd>Esc</kbd> <i data-i18n="legend_pause"></i></span></div>
+        <div><span><kbd>E</kbd> <i data-i18n="legend_cut"></i></span><span><kbd>H</kbd> <i data-i18n="legend_heal"></i></span><span><kbd>Space</kbd> <i data-i18n="legend_jump"></i></span><span><kbd>Shift</kbd> <i data-i18n="legend_sprint"></i></span><span><kbd>C</kbd> <i data-i18n="legend_crouch"></i></span><span><kbd>Esc</kbd> <i data-i18n="legend_pause"></i></span></div>
         <div class="lg-touch"><em data-i18n="legend_touch"></em><span data-i18n="legend_touch_move"></span><span data-i18n="legend_touch_look"></span><span data-i18n="legend_touch_btns"></span></div>
       </aside>
     </section>
@@ -37245,6 +37311,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     }
     function H() {
       a(i.enemies, "clear"),
+        a(i.cityLife, "clear"),
         a(i.fx, "clear"),
         a(i.combat, "reset"),
         a(i.weapon, "reset"),
@@ -37464,6 +37531,14 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           I = !1;
         }
         I && ((fe.x += le), (fe.z += R));
+      } else if (i.city && !i.city.stub && i.city.outside) {
+        // Past the fence the level's port spawns are no longer nearby. The
+        // city supplies a point behind the player instead of clamping the
+        // spawn back onto the port, which used to strand whole waves at the
+        // gate while the player was hundreds of metres west. The random seed
+        // rotates the candidate order, so consecutive waves do not all appear
+        // on the same square metre.
+        fe.copy(i.city.spawnPoint(Y, n.yaw, i.rng()));
       } else {
         let le = i.rng() * Math.PI * 2;
         fe.set(
@@ -37991,6 +38066,17 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         await r("enemies", "enemies", () => Em(t)),
         await r("hud", "hud", () => hM(t)),
         (t.game = mM(t)),
+        t.city &&
+          !t.city.stub &&
+          (() => {
+            try {
+              t.cityLife = createCityLife(t);
+            } catch (err) {
+              console.error(
+                "[boot] city life failed: " + ((err && err.stack) || err),
+              );
+            }
+          })(),
         t.events.on("lang:change", () => {
           try {
             t.game.refreshLabels && t.game.refreshLabels();
@@ -38087,7 +38173,12 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
                   "[loop] showcase update threw: " + ((v && v.stack) || v),
                 ));
             }
-        } else d && (u("player", p), u("weapon", p), u("enemies", p));
+        } else
+          d &&
+            (u("player", p),
+            u("weapon", p),
+            u("enemies", p),
+            u("cityLife", p));
         if (
           t.weapon &&
           t.weapon.setWetness &&
@@ -38272,6 +38363,8 @@ errors ${window.__errors.length}${
       pitch: 0,
       health: 100,
       maxHealth: 100,
+      medkits: 0,
+      medkitMax: 5,
       alive: !0,
       onGround: !0,
       sprinting: !1,
@@ -38284,6 +38377,12 @@ errors ${window.__errors.length}${
       reset() {},
       damage() {},
       heal() {},
+      addMedkit() {
+        return 0;
+      },
+      useMedkit() {
+        return !1;
+      },
       addRecoil() {},
       addShake() {},
       update() {},

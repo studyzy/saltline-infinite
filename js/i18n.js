@@ -37,6 +37,7 @@ const S = {
     legend_aim: "Aim",
     legend_reload: "Reload",
     legend_cut: "Cut relay",
+    legend_heal: "Medkit",
     legend_jump: "Jump",
     legend_sprint: "Sprint",
     legend_crouch: "Crouch",
@@ -133,6 +134,8 @@ const S = {
     hud_objective: "Objective",
     hud_relays: "Relays",
     hud_vitals: "Vitals",
+    hud_medkit: "Medkit",
+    hud_healed: "Medkit +{n}",
     hud_control: "Control",
     hud_destroyed: "destroyed",
     hud_weak: "Weak point",
@@ -184,6 +187,11 @@ const S = {
     // ---- city ----
     city_enter: "Perimeter crossed — the city is open",
     city_district: "District {n}",
+    city_ammo: "Magazine +{n} rounds",
+    city_loot_ammo: "Rounds +{n}",
+    city_medkit: "Medkit +1",
+    city_clear: "Block clear — push deeper",
+    city_threat: "Threat rising — {n} machines per block",
   },
 
   zh: {
@@ -215,6 +223,7 @@ const S = {
     legend_aim: "瞄准",
     legend_reload: "换弹",
     legend_cut: "切断中继",
+    legend_heal: "使用医疗包",
     legend_jump: "跳跃",
     legend_sprint: "冲刺",
     legend_crouch: "下蹲",
@@ -306,6 +315,8 @@ const S = {
     hud_objective: "任务目标",
     hud_relays: "中继",
     hud_vitals: "生命体征",
+    hud_medkit: "医疗包",
+    hud_healed: "医疗包 +{n}",
     hud_control: "控制台",
     hud_destroyed: "已摧毁",
     hud_weak: "弱点",
@@ -352,6 +363,11 @@ const S = {
 
     city_enter: "已越过围墙 — 城市向你敞开",
     city_district: "第 {n} 区",
+    city_ammo: "弹夹 +{n} 发",
+    city_loot_ammo: "弹药 +{n} 发",
+    city_medkit: "医疗包 +1",
+    city_clear: "街区肃清 — 继续深入",
+    city_threat: "威胁上升 — 每街区 {n} 个敌人",
   },
 };
 

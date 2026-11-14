@@ -25,6 +25,11 @@ const ROAD = 9; // road strip on the west and south edge of a block
 const PAVE = 2.4; // pavement band around a lot
 const KERB = 0.14;
 
+// The street ring stays clear of the block's lot, whose interior can be a
+// fenced container yard. Encounters spawn only here so nothing is born caged.
+const LOT_A = ROAD + PAVE * 0.5 + 0.9;
+const LOT_B = LOT_A + CELL - ROAD - PAVE * 1.5 - 1.8;
+
 // The fixed level's footprint: no city here. x0 is the west fence line, not
 // the old -44 ring road — the city's own pavement leaves a five metre verge
 // outside the fence, and testing the whole 40 m cell instead of its lot used
@@ -1262,14 +1267,19 @@ export function createCity(game) {
       setShadowFollow(!inPort(playerPos.x, playerPos.z), playerPos.x, playerPos.z);
     },
     // A spawn point for the pursuit waves: open ground 22-34 m out, behind the
-    // player's back where possible.
-    spawnPoint(playerPos, yaw) {
+    // player's back where possible. `seed` (0..1) rotates the candidate order
+    // so repeated waves scatter instead of stacking on one square metre.
+    spawnPoint(playerPos, yaw, seed = 0) {
       const back = (yaw || 0) + Math.PI;
-      for (let i = 0; i < 14; i++) {
-        const a = back + (i / 14) * Math.PI * 2 + hash(i, 3, 7) * 0.7;
+      const off = Math.floor(Math.abs(seed) * 14) % 14;
+      const spin = (seed || 0) * 0.38;
+      for (let n = 0; n < 14; n++) {
+        const i = (n + off) % 14;
+        const a = back + (i / 14) * Math.PI * 2 + hash(i, 3, 7) * 0.7 + spin;
         const d = 22 + hash(i, 9, 5) * 12;
         const x = playerPos.x + Math.cos(a) * d;
         const z = playerPos.z + Math.sin(a) * d;
+        if (!api.streetAt(x, z)) continue;
         if (z < RESERVED.z0 || z > RESERVED.z1) {
           if (!api.blockedAt(x, z)) return new THREE.Vector3(x, 0, z);
         } else if (x < RESERVED.x0 && !api.blockedAt(x, z)) {
@@ -1277,6 +1287,14 @@ export function createCity(game) {
         }
       }
       return new THREE.Vector3(playerPos.x + Math.cos(back) * 26, 0, playerPos.z + Math.sin(back) * 26);
+    },
+    // True on the road and pavement ring between blocks. Lot interiors are
+    // deliberately excluded: they can be fenced yards with no way out, and a
+    // machine spawned in one would spend its life walking into a fence.
+    streetAt(x, z) {
+      const u = x - Math.floor(x / CELL) * CELL;
+      const v = z - Math.floor(z / CELL) * CELL;
+      return u < LOT_A || u > LOT_B || v < LOT_A || v > LOT_B;
     },
     blockedAt(x, z) {
       const boxes = physics.boxes;

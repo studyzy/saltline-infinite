@@ -661,6 +661,47 @@ body {
 .h-health.crit .h-hp-bar i:not(.off) {
   background: var(--alarm);
 }
+.h-med {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.h-med.has {
+  opacity: 1;
+}
+.hud.on .h-med.has {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.h-med-k {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--bone-faint);
+  font: 600 10px/1 var(--f-mono);
+  color: var(--bone-dim);
+}
+.h-med-l {
+  font: 600 10px/1 var(--f-label);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+}
+.h-med-n {
+  font: 700 16px/1 var(--f-display);
+  color: var(--bone);
+}
+.h-health.healed .h-hp-n {
+  color: #9fe0a8;
+  text-shadow: 0 0 12px rgba(110, 230, 140, 0.6);
+}
+.is-touch .h-med-k {
+  display: none;
+}
 
 /* ammo */
 .h-ammo {
