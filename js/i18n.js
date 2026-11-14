@@ -58,6 +58,7 @@ const S = {
     mp_peer_left: "Teammate disconnected. Waiting up to 90s…",
     mp_peer_back: "Teammate reconnected",
     mp_spectate: "Spectating teammate",
+    mp_extracting: "Extracting",
     title_note:
       "Every surface, machine and sound is generated in your browser. Nothing is downloaded.",
     legend_move: "Move",
@@ -274,6 +275,7 @@ const S = {
     mp_peer_left: "队友掉线，最多等待 90 秒…",
     mp_peer_back: "队友已重连",
     mp_spectate: "观战队友",
+    mp_extracting: "撤离中",
     title_note: "每一块表面、每一台机械、每一段声音都在你的浏览器里现场生成，没有下载任何素材。",
     legend_move: "移动",
     legend_look: "视角",

@@ -70,9 +70,18 @@ export class NetClient {
       } catch {}
       this.send(hello);
     });
-    ws.addEventListener("message", (ev) => this.onMessage(ev.data));
-    ws.addEventListener("close", () => this.onClose());
-    ws.addEventListener("error", () => this.onClose());
+    ws.addEventListener("message", (ev) => {
+      if (this.ws !== ws) return;
+      this.onMessage(ev.data);
+    });
+    ws.addEventListener("close", () => {
+      if (this.ws !== ws) return;
+      this.onClose();
+    });
+    ws.addEventListener("error", () => {
+      if (this.ws !== ws) return;
+      this.onClose();
+    });
   }
 
   disconnect() {

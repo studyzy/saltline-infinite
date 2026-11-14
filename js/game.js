@@ -37449,6 +37449,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             c.intensity = match.threat;
             a(i.audio, "setIntensity", match.threat);
           }
+          if (c.allCut) {
+            if (match.extract > 0)
+              o.setPrompt && o.setPrompt(tr("mp_extracting"), Fo(match.extract));
+            else o.setPrompt && o.setPrompt(null);
+          }
         },
         multiplayerEnd(won) {
           if (_.state === "complete" || _.state === "dead") return;
