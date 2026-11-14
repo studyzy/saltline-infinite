@@ -1,4 +1,4 @@
-// Saltline localisation. English + Simplified Chinese.
+// Endless Deep Blue localisation. English + Simplified Chinese.
 // A language is picked from ?lang=zh|en, then localStorage, then the browser.
 
 const STORE_KEY = "saltline.lang.v1";
@@ -17,12 +17,14 @@ const S = {
     boot_harbormaster: "Waking the Harbormaster",
     boot_light: "Waiting for first light",
     boot_ready: "Ready",
-    boot_fatal: "Saltline could not start: ",
+    boot_fatal: "Endless Deep Blue could not start: ",
     boot_city: "Laying out the city",
 
     // ---- title ----
+    game_title: "Endless Deep Blue",
+    wordmark: "ENDLESS\nDEEP BLUE",
     title_eyebrow_unit: "Port Authority Breach Unit",
-    title_eyebrow_place: "Saltline Terminal · 05:42",
+    title_eyebrow_place: "Deep Blue Terminal · 05:42",
     title_premise:
       "The port’s security net has gone feral. Cut its three uplinks. Reach the boat.",
     title_deploy: "Deploy",
@@ -79,7 +81,7 @@ const S = {
     dead_relays: "Relays cut",
     dead_retry: "Retry",
     debrief_k: "Berth 4 · Debrief",
-    debrief_h: "Saltline is dark",
+    debrief_h: "Deep Blue is dark",
     debrief_rating: "Rating",
     debrief_time: "Time",
     debrief_acc: "Accuracy",
@@ -147,7 +149,7 @@ const S = {
     gamepad: "Gamepad",
     gamepad_note:
       "Sticks move and look · RT fire · LT aim · A jump · B crouch · X reload · Y cut relay · L3 sprint · Start pause.",
-    loc_card: "Saltline Terminal · Berth 4 · 05:42",
+    loc_card: "Deep Blue Terminal · Berth 4 · 05:42",
     loc_card_sub: "Port Authority Breach Unit — one breacher, no backup",
 
     // ---- hud ----
@@ -200,7 +202,7 @@ const S = {
     radio_cut2: "Two dark. It is throwing everything it has left at you.",
     radio_all: "All three dark. The boat is holding at the quay ladder, south end. Run.",
     radio_low: "You are hit hard. Get behind steel and breathe.",
-    radio_done: "Breacher is aboard. Saltline is dark. Good work.",
+    radio_done: "Breacher is aboard. Deep Blue is dark. Good work.",
     radio_city:
       "You are past the perimeter. The city goes on — keep moving, they will follow you out here.",
 
@@ -226,11 +228,13 @@ const S = {
     boot_harbormaster: "正在唤醒“港务长”",
     boot_light: "正在等待第一缕光",
     boot_ready: "就绪",
-    boot_fatal: "《盐线》无法启动：",
+    boot_fatal: "《深蓝无尽》无法启动：",
     boot_city: "正在铺设城市",
 
+    game_title: "深蓝无尽",
+    wordmark: "深蓝无尽",
     title_eyebrow_unit: "港务局破袭小队",
-    title_eyebrow_place: "盐线码头 · 05:42",
+    title_eyebrow_place: "深蓝码头 · 05:42",
     title_premise: "港口的安全网络已经失控。切断它的三条上行链路，然后上船。",
     title_deploy: "出击",
     title_coop: "双人合作",
@@ -284,7 +288,7 @@ const S = {
     dead_relays: "已切断中继",
     dead_retry: "重试",
     debrief_k: "四号泊位 · 行动简报",
-    debrief_h: "盐线已熄灭",
+    debrief_h: "深蓝已熄灭",
     debrief_rating: "评级",
     debrief_time: "用时",
     debrief_acc: "命中率",
@@ -349,7 +353,7 @@ const S = {
     gamepad: "手柄",
     gamepad_note:
       "摇杆移动与转向 · RT 开火 · LT 瞄准 · A 跳跃 · B 下蹲 · X 换弹 · Y 切断中继 · L3 冲刺 · Start 暂停。",
-    loc_card: "盐线码头 · 四号泊位 · 05:42",
+    loc_card: "深蓝码头 · 四号泊位 · 05:42",
     loc_card_sub: "港务局破袭小队 — 一人潜入，没有后援",
 
     hud_objective: "任务目标",
@@ -398,7 +402,7 @@ const S = {
     radio_cut2: "两条熄灭。它把剩下的一切都压上来了。",
     radio_all: "三条全灭。船停在码头南端的爬梯边，跑。",
     radio_low: "你被打得很重。躲到钢板后面喘口气。",
-    radio_done: "破袭者已上船。盐线熄灭。干得好。",
+    radio_done: "破袭者已上船。深蓝熄灭。干得好。",
     radio_city: "你已经出了围墙。这座城市没有尽头——继续走，它们会跟着你出来。",
 
     city_enter: "已越过围墙 — 城市向你敞开",
@@ -436,6 +440,7 @@ export function setLang(next, { persist = true } = {}) {
   lang = next;
   if (persist) { try { localStorage.setItem(STORE_KEY, lang); } catch {} }
   try { document.documentElement.lang = lang === "zh" ? "zh-CN" : "en"; } catch {}
+  try { document.title = S[lang].game_title; } catch {}
   return true;
 }
 

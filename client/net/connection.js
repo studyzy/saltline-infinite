@@ -7,6 +7,7 @@ import {
   encode,
   decode,
 } from "../../shared/protocol.js";
+import { Vector3 } from "../../shared/three.js";
 import { computeWorldHashes } from "./world-hash.js";
 import { Prediction } from "./prediction.js";
 import { Interpolator } from "./interpolation.js";
@@ -113,6 +114,11 @@ export class NetClient {
         this.lastSnap = msg;
         this.prediction.onSnapshot(msg.self);
         this.interp.push(msg);
+        if (this.game.weapon && this.game.weapon.setNetworkState)
+          this.game.weapon.setNetworkState({
+            ammo: msg.self.ammo,
+            reserve: msg.self.reserve,
+          });
         break;
       case "ev":
         this.onEvent(msg);
@@ -153,17 +159,118 @@ export class NetClient {
 
   onEvent(msg) {
     const { k, id, t, ...payload } = msg;
-    if (k === "match" && payload.state === "disbanded") {
-      this.active = false;
-      this.ui.setStatus("mp_err_closed", null, "error");
-      this.ui.show();
+    switch (k) {
+      case "enemyDown":
+        if (this.game.enemies && this.game.enemies.killRemote)
+          this.game.enemies.killRemote(payload.id);
+        this.game.events.emit("enemy:killed", {
+          type: payload.type,
+          pos: payload.pos ? new Vector3(...payload.pos) : null,
+        });
+        break;
+      case "telegraph":
+        this.game.events.emit("enemy:telegraph", {
+          type: payload.type,
+          time: payload.time,
+          melee: payload.melee,
+          pos: payload.pos ? new Vector3(...payload.pos) : null,
+        });
+        break;
+      case "melee":
+        this.game.events.emit("enemy:melee", {
+          pos: payload.pos ? new Vector3(...payload.pos) : null,
+        });
+        break;
+      case "alert":
+        this.game.events.emit("enemy:alert", {
+          type: payload.type,
+          pos: payload.pos ? new Vector3(...payload.pos) : null,
+        });
+        break;
+      case "enemyFire":
+        this.game.events.emit("enemy:fire", {
+          type: payload.type,
+          pos: payload.pos ? new Vector3(...payload.pos) : null,
+        });
+        break;
+      case "shot":
+        this.onShot(payload);
+        break;
+      case "hurt":
+        if (payload.playerId === this.playerId) {
+          const p = this.game.player;
+          if (p && p.addShake) p.addShake(0.2 + (payload.amount || 0) / 70);
+          this.game.events.emit("player:hit", {
+            amount: payload.amount,
+            fromPos: payload.from ? new Vector3(...payload.from) : null,
+          });
+        }
+        break;
+      case "match":
+        if (payload.state === "won" || payload.state === "lost") {
+          this.active = false;
+          if (this.game.game && this.game.game.multiplayerEnd)
+            this.game.game.multiplayerEnd(payload.state === "won");
+        } else if (payload.state === "disbanded") {
+          this.active = false;
+          this.ui.setStatus("mp_err_closed", null, "error");
+          this.ui.show();
+        }
+        break;
     }
     this.game.events.emit(k, payload);
   }
 
+  onShot(payload) {
+    const self = payload.by === this.playerId;
+    const hit = payload.hit || {};
+    if (self && hit.kind === "enemy") {
+      this.game.events.emit("player:hitEnemy", {
+        killed: !!hit.killed,
+        weak: !!hit.weak,
+        part: hit.part,
+      });
+      this.game.events.emit("impact", {
+        point: new Vector3(...hit.point),
+        normal: new Vector3(...(hit.normal || [0, 0, 0])),
+        surface: "enemy",
+        enemy: {},
+        part: hit.part,
+        from: "player",
+      });
+    } else if (self && hit.kind === "world") {
+      this.game.events.emit("impact", {
+        point: new Vector3(...hit.point),
+        normal: new Vector3(...(hit.normal || [0, 0, 0])),
+        surface: hit.surface,
+        enemy: null,
+        from: "player",
+      });
+    }
+    if (!self && this.game.fx && this.game.fx.tracer) {
+      try {
+        this.game.fx.tracer(
+          new Vector3(...payload.from),
+          new Vector3(...payload.to),
+        );
+      } catch {}
+    }
+  }
+
+  sendFire(origin, dir) {
+    if (!this.active) return false;
+    return this.send({
+      t: "fire",
+      seq: this.seq || 1,
+      origin: [origin.x, origin.y, origin.z],
+      dir: [dir.x, dir.y, dir.z],
+      ct: Date.now(),
+    });
+  }
+
   update(dt) {
     if (!this.active || !this.ws || this.ws.readyState !== 1) return;
-    this.interp.update();
+    this.interp.update(dt);
 
     const input = this.game.input;
     if (!input) return;

@@ -46,6 +46,7 @@ function client(port, room) {
     ws,
     welcome: null,
     snaps: [],
+    events: [],
     started: false,
     closed: false,
     seq: 0,
@@ -55,6 +56,7 @@ function client(port, room) {
     if (msg.t === "welcome") state.welcome = msg;
     if (msg.t === "start") state.started = true;
     if (msg.t === "snap") state.snaps.push(msg);
+    if (msg.t === "ev") state.events.push(msg);
     if (msg.t === "reject") state.reject = msg;
   });
   ws.on("close", () => {
@@ -144,6 +146,9 @@ test("two clients join, move, and see each other", async (t) => {
   const lastA = a.snaps[a.snaps.length - 1];
   const lastB = b.snaps[b.snaps.length - 1];
   assert.ok(lastA && lastB);
+  assert.ok(lastA.enemies.length >= 1, "patrol enemies exist");
+  assert.ok(lastA.enemies.some((e) => e.type === "gull"));
+  assert.ok(lastA.enemies.some((e) => e.type === "hound"));
   assert.ok(lastA.ack >= 20, `ack ${lastA.ack}`);
   assert.ok(lastB.players.length >= 1);
   const seen = lastB.players[0];
@@ -152,4 +157,32 @@ test("two clients join, move, and see each other", async (t) => {
   assert.ok(Math.abs(seen.pos[2] - self.pos[2]) < 0.3);
   // The player actually moved from the spawn point.
   assert.ok(Math.abs(self.pos[0] + 32) > 0.5, `x=${self.pos[0]}`);
+
+  // Fire at the first visible enemy. The exact hit is geometry-dependent; the
+  // point of this check is that the authoritative fire path runs and answers.
+  const enemy = lastA.enemies[0];
+  const ox = self.pos[0];
+  const oy = self.pos[1] + 1.68;
+  const oz = self.pos[2];
+  const dx = enemy.pos[0] - ox;
+  const dy = enemy.pos[1] + 0.8 - oy;
+  const dz = enemy.pos[2] - oz;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  send(a.ws, {
+    t: "fire",
+    seq: a.seq,
+    origin: [ox, oy, oz],
+    dir: [dx / len, dy / len, dz / len],
+    ct: Date.now(),
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  const shot = a.events.find((e) => e.k === "shot");
+  assert.ok(shot, "server answered a fire event");
+  assert.ok(
+    shot.hit.kind === "world" ||
+      shot.hit.kind === "enemy" ||
+      shot.hit.kind === "none",
+  );
+  const afterFire = a.snaps[a.snaps.length - 1];
+  assert.ok(afterFire.self.ammo < 30, `ammo ${afterFire.self.ammo}`);
 });

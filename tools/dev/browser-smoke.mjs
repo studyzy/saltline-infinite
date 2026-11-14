@@ -81,6 +81,35 @@ for (const [name, page] of [["A", a], ["B", b]]) {
 }
 
 await a.waitForTimeout(1500);
+console.log(
+  "world",
+  await a.evaluate(() => ({
+    enemies: window.__G.net.lastSnap.enemies.length,
+    remote: window.__G.enemies.list.filter((e) => e.remote).length,
+    hp: window.__G.player.health,
+    ammo: window.__G.net.lastSnap.self.ammo,
+  })),
+);
+
+await a.evaluate(() => {
+  const e = window.__G.net.lastSnap.enemies[0];
+  if (!e) return;
+  const o = window.__G.camera.position.clone();
+  const d = new window.__G.THREE.Vector3(
+    e.pos[0] - o.x,
+    e.pos[1] + 0.8 - o.y,
+    e.pos[2] - o.z,
+  ).normalize();
+  window.__G.combat.playerShot(o, d, {});
+});
+await a.waitForTimeout(600);
+console.log(
+  "after fire",
+  await a.evaluate(() => ({
+    ammo: window.__G.net.lastSnap.self.ammo,
+    weapon: window.__G.weapon.ammo,
+  })),
+);
 
 for (const [name, page] of [["A", a], ["B", b]]) {
   await page.evaluate(() => {

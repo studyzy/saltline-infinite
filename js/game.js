@@ -5343,7 +5343,7 @@ float metalnessFactor = metalness * slORM.b;
       }),
         (_ = -x / 2 + 0.25),
         (M = y - 0.75 - 3 * 0.78 - 0.05),
-        w(e.label("SALTLINE TERMINAL  B4-0271", { color: "white" }), 0.3),
+        w(e.label("DEEP BLUE TERMINAL  B4-0271", { color: "white" }), 0.3),
         w(
           e.label("MAX GROSS 30480 KG", { color: "yellow", distress: 0.6 }),
           0.22,
@@ -10713,7 +10713,7 @@ float metalnessFactor = metalness * slORM.b;
         );
       }
       t.label(
-        y > 0 ? "NYY-J 4x95 mm2  500 m" : "SALTLINE TERMINAL",
+        y > 0 ? "NYY-J 4x95 mm2  500 m" : "DEEP BLUE TERMINAL",
         { color: "white", font: "stencil", distress: 0.45 },
         0.7,
         0.085,
@@ -12094,7 +12094,7 @@ float metalnessFactor = metalness * slORM.b;
           0.4,
         ),
         t.label(
-          "SALTLINE",
+          "DEEP BLUE",
           { color: "black", font: "sans", distress: 0.3 },
           0.42,
           0.085,
@@ -17241,7 +17241,7 @@ varying float vBlink;
         ],
         { post: 1, tint: En },
       );
-    let me = i.mats.label("SALTLINE 04", {
+    let me = i.mats.label("DEEP BLUE 04", {
         color: "white",
         font: "stencil",
         distress: 0.35,
@@ -19269,7 +19269,7 @@ uniform float uTime;
         boatBase: r,
         extractionPoint: new W(30, 0, 20),
         shipName: "KITTIWAKE",
-        craneId: "SALTLINE 04",
+        craneId: "DEEP BLUE 04",
         stats: { tris: Math.round(v), drawCalls: g },
       }
     );
@@ -29349,6 +29349,37 @@ void main() {
           s,
           { damage: o = 28, range: r = 300, impulse: a = 1 } = {},
         ) {
+          if (i.net && i.net.active) {
+            e.shots++;
+            const l = i.physics.raycast(n, s, r);
+            const c = i.enemies.raycast(n, s, l ? l.dist : r);
+            i.net.sendFire(n, s);
+            if (c)
+              return {
+                dist: c.dist,
+                point: c.point,
+                normal: c.normal,
+                surface: "enemy",
+                enemy: c.enemy,
+                part: c.part,
+                dir: s,
+                from: "player",
+                killed: !1,
+                visual: !0,
+              };
+            if (l)
+              return {
+                dist: l.dist,
+                point: l.point,
+                normal: l.normal,
+                surface: l.surface,
+                enemy: null,
+                dir: s,
+                from: "player",
+                visual: !0,
+              };
+            return null;
+          }
           e.shots++;
           let l = i.physics.raycast(n, s, r),
             c = i.enemies.raycast(n, s, l ? l.dist : r);
@@ -31606,7 +31637,7 @@ void main() {
       o = '"Big Shoulders Display", "Barlow Condensed", Impact, sans-serif',
       r = "rgba(196,198,194,0.92)";
     t("model", "PAC-9", `700 78px ${o}`, r),
-      t("maker", "LONGSHORE ARMS WORKS  \xB7  SALTLINE", `600 30px ${n}`, r),
+      t("maker", "LONGSHORE ARMS WORKS  \xB7  DEEP BLUE", `600 30px ${n}`, r),
       t("cal", "CAL 5.8\xD740   SN PA-004217", `500 27px ${s}`, r),
       t(
         "prop",
@@ -32381,6 +32412,13 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         reloadNow: Fe,
         addAmmo(Me) {
           ve.reserve += Me;
+        },
+        setNetworkState(Me) {
+          if (!Me) return;
+          if (typeof Me.ammo === "number")
+            ve.ammo = Math.max(0, Math.min(ve.magSize, Me.ammo));
+          if (typeof Me.reserve === "number")
+            ve.reserve = Math.max(0, Me.reserve);
         },
         setWetness(Me) {
           Wv.value = Math.max(0, Math.min(1, +Me || 0));
@@ -34178,7 +34216,25 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             A.normal.normalize(),
             !0);
       },
+      remote(y) {
+        if (!d.active) return;
+        if (!d.alive) {
+          g(y);
+          return;
+        }
+        a.group.visible = true;
+        a.group.rotation.y = d.yaw;
+        const speed = d.remoteSpeed || 0;
+        for (let i = 0; i < 4; i++) {
+          const rotor = l["rotor" + i];
+          if (rotor) rotor.rotation.y += y * (16 + speed * 2) * (i % 2 ? -1 : 1);
+        }
+        if (l.body)
+          l.body.rotation.z =
+            Math.sin((performance.now() / 1000) * 3 + d.id) * 0.05;
+      },
       _update(y) {
+        if (d.isRemote) return d.remote(y);
         d.alive ? x(y) : g(y);
       },
     };
@@ -34799,7 +34855,27 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             j
           );
         },
+        remoteHound(T) {
+          if (!m.active) return;
+          if (!m.alive) {
+            U(T);
+            return;
+          }
+          a.group.visible = true;
+          a.group.rotation.y = m.yaw;
+          const speed = m.remoteSpeed || 0;
+          m.remotePhase = (m.remotePhase || 0) + T * (1.5 + speed * 1.4);
+          const swing =
+            Math.sin(m.remotePhase) * Math.min(0.45, 0.08 + speed * 0.1);
+          for (let i = 0; i < 4; i++) {
+            const thigh = l["thigh" + ni.legs[i]];
+            const shin = l["shin" + ni.legs[i]];
+            if (thigh) thigh.rotation.x = swing * (i % 2 ? 1 : -1);
+            if (shin) shin.rotation.x = -swing * 0.6 * (i % 2 ? 1 : -1);
+          }
+        },
         _update(T) {
+          if (m.isRemote) return m.remoteHound(T);
           m.alive ? S(T) : U(T);
         },
       };
@@ -35770,6 +35846,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     };
     function _(T) {
       let D = i.player,
+        targets = i.players && i.players.length ? i.players : D ? [D] : [],
         C = 0;
       for (let G = 0; G < g.length; G++) {
         let j = g[G];
@@ -35778,17 +35855,25 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         j.life -= T;
         let Q = i.physics.raycast(j.pos, j.dir, N),
           K = Q ? Q.dist : N,
-          ie = !1;
-        if (
-          (D &&
-            D.alive !== !1 &&
-            (oM.copy(j.pos).addScaledVector(j.dir, K),
-            cM.set(D.pos.x, D.pos.y + 0.35, D.pos.z),
-            uM.set(D.pos.x, D.pos.y + (D.crouching ? 1 : 1.5), D.pos.z),
-            HC(j.pos, oM, cM, uM) < 0.36 * 0.36 && (ie = !0)),
-          ie)
-        ) {
-          D.damage(Ui.gull.boltDamage, j.from), (j.on = !1);
+          ie = !1,
+          hitTarget = null;
+        for (const target of targets) {
+          if (!target || target.alive === false) continue;
+          oM.copy(j.pos).addScaledVector(j.dir, K);
+          cM.set(target.pos.x, target.pos.y + 0.35, target.pos.z);
+          uM.set(
+            target.pos.x,
+            target.pos.y + (target.crouching ? 1 : 1.5),
+            target.pos.z,
+          );
+          if (HC(j.pos, oM, cM, uM) < 0.36 * 0.36) {
+            ie = true;
+            hitTarget = target;
+            break;
+          }
+        }
+        if (ie) {
+          hitTarget.damage(Ui.gull.boltDamage, j.from), (j.on = !1);
           continue;
         }
         if (Q) {
@@ -35884,6 +35969,56 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
               j)
             : null;
         },
+        byId(T) {
+          return t.find((D) => D.id === T) || null;
+        },
+        spawnRemote(T, D, C, G) {
+          const j = U.spawn(D, C, {
+            state: G === "patrol" ? "patrol" : "alert",
+            passive: !0,
+          });
+          if (!j) return null;
+          (j.id = T), (j.isRemote = !0), (j.remoteSpeed = 0);
+          if (G) j.mode = G;
+          return j;
+        },
+        applyRemote(T, D) {
+          if (!D) return null;
+          let C = U.byId(T);
+          if (!C)
+            C = U.spawnRemote(
+              T,
+              D.type,
+              new W(D.pos[0], D.pos[1], D.pos[2]),
+              D.mode,
+            );
+          if (!C) return null;
+          C.isRemote = !0;
+          C.pos.set(D.pos[0], D.pos[1], D.pos[2]);
+          C.yaw = D.yaw;
+          C.mode = D.mode;
+          C.hp = D.hp;
+          C.remoteSpeed = D.speed || 0;
+          if (D.hp > 0) {
+            C.alive = !0;
+            C.active = !0;
+          } else if (C.alive) {
+            U.killRemote(T);
+          }
+          return C;
+        },
+        killRemote(T) {
+          const D = U.byId(T);
+          if (!D || !D.alive) return;
+          (D.alive = !1), (D.dieT = 0);
+          if (D.type === "gull" && (D.lostRotor == null || D.lostRotor < 0))
+            D.lostRotor = 0;
+          if (D.type === "hound") (D.wreck = !1), (D.sink = 0);
+        },
+        removeRemote(T) {
+          const D = U.byId(T);
+          if (D) D._deactivate();
+        },
         raycast(T, D, C = 300) {
           let G = null;
           for (let j = 0; j < t.length; j++) {
@@ -35937,11 +36072,30 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
           if (T <= 0) return;
           T > 0.05 && (T = 0.05), (h.t += T), (q -= T);
           let D = i.player;
+          if (i.players && i.players.length) D = i.players[0];
           if (D) {
             let C = D.vel ? Math.hypot(D.vel.x, D.vel.z) : D.speed || 0;
             h.playerSpeed += (C - h.playerSpeed) * (1 - Math.exp(-6 * T));
           }
-          for (let C = t.length - 1; C >= 0; C--) t[C]._update(T);
+          for (let C = t.length - 1; C >= 0; C--) {
+            const enemy = t[C];
+            if (i.players && i.players.length) {
+              let best = i.players[0],
+                bestD = Infinity;
+              for (const p of i.players) {
+                if (!p || p.alive === false) continue;
+                const dx = p.pos.x - enemy.pos.x;
+                const dz = p.pos.z - enemy.pos.z;
+                const d2 = dx * dx + dz * dz;
+                if (d2 < bestD) {
+                  bestD = d2;
+                  best = p;
+                }
+              }
+              i.player = best;
+            }
+            enemy._update(T);
+          }
           _(T), H(T);
         },
         debug: {
@@ -36744,10 +36898,10 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     <div class="m-veil"></div>
     <div class="m-bars"><i></i><i></i></div>
 
-    <section class="m-screen m-title" data-s="title" aria-label="Saltline">
+    <section class="m-screen m-title" data-s="title" data-i18n-aria="game_title">
       <div class="m-title-main">
         <div class="m-eyebrow"><span class="m-tag">B4</span><span data-i18n="title_eyebrow_unit"></span><span class="m-dim" data-i18n="title_eyebrow_place"></span></div>
-        <h1 class="m-word">SALTLINE</h1>
+        <h1 class="m-word" data-i18n="wordmark"></h1>
         <p class="m-premise" data-i18n="title_premise"></p>
         <div class="m-actions">
           <button class="btn primary" data-act="deploy" data-i18n="title_deploy"></button>
@@ -37251,6 +37405,60 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         debugCut() {
           let P = c.relays.find((V) => !V.cut);
           P && me(P);
+        },
+        applyServerRelays(relays) {
+          if (!c.mp || !Array.isArray(relays)) return;
+          let P = 0;
+          for (const V of relays) {
+            const Y = c.relays.find((L) => L.id === V.id);
+            if (!Y) continue;
+            Y.t = V.progress;
+            Y.cut = !!V.cut;
+            if (Y.cut) P++;
+          }
+          const V = P !== c.cut;
+          c.cut = P;
+          c.allCut = c.relays.length > 0 && P >= c.relays.length;
+          if (V) {
+            o.setRelays && o.setRelays(c.cut, c.relays.length);
+            o.setObjective && o.setObjective(D());
+            q();
+          }
+          const Y = n.alive ? $() : null;
+          if (Y && !Y.cut)
+            o.setPrompt &&
+              o.setPrompt(tr("relay_cut_prompt", { short: Y.short }), Fo(Y.t));
+          else o.setPrompt && o.setPrompt(null);
+        },
+        applyServerMatch(match) {
+          if (!c.mp || !match) return;
+          if (typeof match.threat === "number") {
+            c.intensity = match.threat;
+            a(i.audio, "setIntensity", match.threat);
+          }
+        },
+        multiplayerEnd(won) {
+          if (_.state === "complete" || _.state === "dead") return;
+          if (won) {
+            try {
+              ee();
+            } catch (P) {
+              console.error("[game] win screen failed", P);
+            }
+            return;
+          }
+          (n.alive = !1),
+            (n.enabled = !1),
+            r.setGameplay && r.setGameplay(!1),
+            r.exitLock && r.exitLock(),
+            o.setPrompt && o.setPrompt(null),
+            o.show(!1),
+            l.setDead({
+              time: c.time,
+              relays: c.cut,
+              total: c.relays.length,
+            }),
+            M("dead");
         },
         refreshLabels() {
           l.relabel && l.relabel();
@@ -37922,7 +38130,6 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
     xM = document.getElementById("boot-msg");
     yM = document.getElementById("boot-fill");
     try {
-      document.title = getLang() === "zh" ? "盐线 · SALTLINE" : "Saltline";
       xM && (xM.textContent = tr("boot_raising"));
     } catch {}
   }
@@ -38440,7 +38647,12 @@ errors ${window.__errors.length}${
   // Exports for the headless tools. Keeping the boot behind a document guard
 // lets tools/export-port-colliders.mjs import the level builder in Node
 // without starting a renderer.
-export { C1 as buildPortLevel, Yg as createProps, il as createRng };
+export {
+  C1 as buildPortLevel,
+  Yg as createProps,
+  il as createRng,
+  Em as createEnemies,
+};
 
 if (typeof document !== "undefined") {
   QC().catch((i) => bM((i && i.stack) || i));

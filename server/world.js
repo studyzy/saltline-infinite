@@ -1,24 +1,14 @@
 // One authoritative room world: the fixed port plus the collider-only city
 // around the players' spawn. No renderer, no materials with textures.
 
-import { Scene, MeshBasicMaterial, Color } from "../shared/three.js";
+import { Scene } from "../shared/three.js";
 import { createPhysics } from "../shared/physics.js";
 import { loadPort } from "../shared/world/port.js";
 import { hashBoxes, cityManifest } from "../shared/hash.js";
 import { createCity } from "../js/city.js";
+import { stubMats } from "./stub-mats.js";
 
 const port = loadPort();
-
-function stubMats() {
-  const base = new MeshBasicMaterial({ color: new Color(0.5, 0.5, 0.5) });
-  return {
-    get: () => base.clone(),
-    emissive: () => base.clone(),
-    decal: () => ({ material: base.clone(), aspect: 3 }),
-    label: () => ({ material: base.clone(), aspect: 3 }),
-    names: () => [],
-  };
-}
 
 export function createRoomWorld() {
   const game = {

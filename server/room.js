@@ -1,9 +1,13 @@
 // Authoritative room: handshake, 30 Hz simulation, 20 Hz snapshots.
 
 import crypto from "node:crypto";
+import { Vector3 } from "../shared/three.js";
 import { createRoomWorld } from "./world.js";
 import { SessionStore } from "./session.js";
 import { buildSnapshot } from "./snapshot.js";
+import { Bus } from "./bus.js";
+import { createEnemySim, Director, makeFacade } from "./enemies.js";
+import { resolveShot } from "./combat.js";
 import { createPlayerState, step } from "../shared/player.js";
 import {
   encode,
@@ -15,6 +19,7 @@ import {
   PROTOCOL_VERSION,
   MAX_MESSAGES_PER_SECOND,
   MAX_MESSAGE_BYTES,
+  BTN,
 } from "../shared/protocol.js";
 import { WEAPON, MATCH } from "../shared/constants.js";
 
@@ -53,6 +58,7 @@ export class Room {
   constructor(code, manager) {
     this.code = code;
     this.manager = manager;
+    this.seed = 4207;
     this.world = createRoomWorld();
     this.players = [];
     this.state = "lobby";
@@ -65,8 +71,100 @@ export class Room {
     this.extractT = 0;
     this.emptySince = Date.now();
     this.disposed = false;
+    this.starting = false;
+    this.bus = new Bus();
+    this.enemies = null;
+    this.enemyGame = null;
+    this.director = null;
+    this.facades = [];
+    this.relays = [];
+    this.cutCount = 0;
+    this.allCut = false;
+    this.history = [];
+    this.bindEnemyEvents();
+    this.enemySnapshot = () =>
+      this.enemies
+        ? this.enemies.list
+            .filter((e) => e.alive && e.active)
+            .map((e) => ({
+              id: e.id,
+              type: e.type,
+              pos: [
+                Math.round(e.pos.x * 1000) / 1000,
+                Math.round(e.pos.y * 1000) / 1000,
+                Math.round(e.pos.z * 1000) / 1000,
+              ],
+              yaw: Math.round(e.yaw * 1000) / 1000,
+              mode: e.mode,
+              hp: Math.max(0, Math.round(e.hp)),
+              speed:
+                Math.round(
+                  Math.hypot(e.vel ? e.vel.x : 0, e.vel ? e.vel.z : 0) * 100,
+                ) / 100,
+            }))
+        : [];
+    this.relaySnapshot = () =>
+      this.relays.map((r) => ({
+        id: r.id,
+        progress: Math.round(r.progress * 1000) / 1000,
+        cut: r.cut,
+      }));
     this.timer = setInterval(() => this.step(), 1000 / TICK_RATE);
     if (this.timer.unref) this.timer.unref();
+  }
+
+  bindEnemyEvents() {
+    this.bus.on("enemy:killed", ({ enemy, type, pos }) => {
+      if (!enemy) return;
+      this.event("enemyDown", {
+        id: enemy.id,
+        type: type || enemy.type,
+        pos: pos ? [pos.x, pos.y, pos.z] : null,
+      });
+    });
+    this.bus.on("enemy:spawn", ({ enemy }) => {
+      if (!enemy) return;
+      this.event("enemySpawn", {
+        id: enemy.id,
+        type: enemy.type,
+        pos: [enemy.pos.x, enemy.pos.y, enemy.pos.z],
+        mode: enemy.mode,
+      });
+    });
+    this.bus.on("enemy:telegraph", ({ enemy, type, time, pos, melee }) => {
+      if (!enemy) return;
+      this.event("telegraph", {
+        id: enemy.id,
+        type: type || enemy.type,
+        time,
+        melee: !!melee,
+        pos: pos ? [pos.x, pos.y, pos.z] : null,
+      });
+    });
+    this.bus.on("enemy:melee", ({ enemy, pos }) => {
+      if (!enemy) return;
+      this.event("melee", {
+        id: enemy.id,
+        type: enemy.type,
+        pos: pos ? [pos.x, pos.y, pos.z] : null,
+      });
+    });
+    this.bus.on("enemy:alert", ({ enemy, pos }) => {
+      if (!enemy) return;
+      this.event("alert", {
+        id: enemy.id,
+        type: enemy.type,
+        pos: pos ? [pos.x, pos.y, pos.z] : null,
+      });
+    });
+    this.bus.on("enemy:fire", ({ enemy, pos }) => {
+      if (!enemy) return;
+      this.event("enemyFire", {
+        id: enemy.id,
+        type: enemy.type,
+        pos: pos ? [pos.x, pos.y, pos.z] : null,
+      });
+    });
   }
 
   addPlayer(ws, build) {
@@ -88,6 +186,8 @@ export class Room {
       lastAck: 0,
       seqToTick: new Map(),
       lastFireAt: -1e9,
+      lastBtn: 0,
+      fireQueue: [],
       ammo: WEAPON.magSize,
       reserve: WEAPON.reserve,
       reloadT: 0,
@@ -152,23 +252,86 @@ export class Room {
     if (player.fireQueue.length < 32) player.fireQueue.push(fire);
   }
 
-  maybeStart() {
-    if (this.state !== "lobby") return;
+  async maybeStart() {
+    if (this.state !== "lobby" || this.starting) return;
     if (this.players.length !== MAX_PLAYERS) return;
     if (!this.players.every((p) => p.ready && p.connected)) return;
-    this.state = "countdown";
-    this.time = 0;
-    this.startTick = this.tick + Math.round(MATCH.countdownSeconds * TICK_RATE);
+    this.starting = true;
+    try {
+      await this.ensureEnemies();
+      this.refreshFacades();
+      this.resetMatch();
+      this.state = "countdown";
+      this.time = 0;
+      this.startTick =
+        this.tick + Math.round(MATCH.countdownSeconds * TICK_RATE);
+      for (const p of this.players) {
+        p.state.enabled = true;
+        p.state.health = p.state.maxHealth;
+        p.state.alive = true;
+      }
+      this.broadcast({
+        t: "start",
+        tick: this.startTick,
+        countdownMs: Math.round(MATCH.countdownSeconds * 1000),
+      });
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  async ensureEnemies() {
+    if (!this.enemies) await createEnemySim(this);
+    if (!this.director) this.director = new Director(this);
+  }
+
+  refreshFacades() {
+    this.facades = this.players.map((p) => makeFacade(this, p));
+    if (this.enemyGame) {
+      this.enemyGame.players = this.facades;
+      this.enemyGame.player = this.facades[0] || null;
+    }
+  }
+
+  resetMatch() {
+    const start = this.world.level.playerStart;
+    this.relays = (this.world.level.objectives || []).map((o, i) => ({
+      id: o.id || "relay_" + i,
+      pos: o.pos.clone ? o.pos.clone() : o.pos,
+      progress: 0,
+      cut: false,
+      short: String(o.id || "A" + i).slice(-1).toUpperCase(),
+    }));
+    this.cutCount = 0;
+    this.allCut = false;
+    this.extractT = 0;
+    this.threat = 0;
+    this.history.length = 0;
     for (const p of this.players) {
-      p.state.enabled = true;
+      const pos = this.spawnFor(p.id);
+      p.state.pos.copy(pos);
+      p.state.vel.set(0, 0, 0);
+      p.state.yaw = start.yaw || 0;
+      p.state.pitch = 0;
       p.state.health = p.state.maxHealth;
       p.state.alive = true;
+      p.state.enabled = true;
+      p.state.onGround = true;
+      p.state.lastSafe.copy(pos);
+      p.downed = false;
+      p.downT = 0;
+      p.reviveT = 0;
+      p.ammo = WEAPON.magSize;
+      p.reserve = WEAPON.reserve;
+      p.reloadT = 0;
+      p.lastFireAt = -1e9;
+      p.lastBtn = 0;
+      p.inputs.length = 0;
+      p.lastAck = 0;
+      p.seqToTick.clear();
+      p.fireQueue = [];
     }
-    this.broadcast({
-      t: "start",
-      tick: this.startTick,
-      countdownMs: Math.round(MATCH.countdownSeconds * 1000),
-    });
+    if (this.director) this.director.start();
   }
 
   step() {
@@ -183,7 +346,6 @@ export class Room {
 
     if (this.state === "playing") {
       this.time += DT;
-      for (const p of this.players) if (p.connected) this.drainInputs(p);
       const foci = this.players
         .filter((p) => p.connected)
         .map((p) => p.state.pos);
@@ -191,6 +353,25 @@ export class Room {
         this.world.city.update(0, foci);
         this.world.city.flush();
       }
+      for (const p of this.players) if (p.connected) this.drainInputs(p);
+      this.processFires();
+      this.updateReload(DT);
+      if (this.enemies) {
+        try {
+          this.enemies.update(DT);
+        } catch (err) {
+          console.error("[room] enemy update threw", err);
+        }
+      }
+      if (this.director) this.director.update(DT);
+      this.updateRelays(DT);
+      this.updateExtraction(DT);
+      this.recordHistory();
+      const aliveEnemies = this.enemies ? this.enemies.aliveCount() : 0;
+      this.threat = Math.min(
+        1,
+        aliveEnemies / Math.max(1, MATCH.maxAlive) + (this.allCut ? 0.25 : 0),
+      );
     }
 
     this.snapAcc += SNAP_RATE / TICK_RATE;
@@ -212,13 +393,15 @@ export class Room {
         player.lastAck = Math.max(player.lastAck, input.seq);
         continue;
       }
-      const firing = Date.now() - player.lastFireAt < 250;
+      const firing = this.time - player.lastFireAt < 0.25;
       step(
         player.state,
         inputCommand(input, firing),
         input.dt,
         this.world.physics,
       );
+      player.lastBtn = input.btn;
+      if (input.btn & BTN.RELOAD) this.startReload(player);
       player.lastAck = Math.max(player.lastAck, input.seq);
       player.seqToTick.set(input.seq, this.tick);
       if (player.seqToTick.size > 120) {
@@ -226,6 +409,243 @@ export class Room {
         player.seqToTick.delete(first);
       }
     }
+  }
+
+  startReload(player) {
+    if (player.reloadT > 0 || player.ammo >= WEAPON.magSize || player.reserve <= 0)
+      return;
+    player.reloadT =
+      player.ammo <= 0 ? WEAPON.emptyReloadSeconds : WEAPON.reloadSeconds;
+  }
+
+  updateReload(dt) {
+    for (const p of this.players) {
+      if (p.reloadT <= 0) continue;
+      p.reloadT = Math.max(0, p.reloadT - dt);
+      if (p.reloadT <= 0) {
+        const take = Math.min(WEAPON.magSize - p.ammo, p.reserve);
+        p.ammo += take;
+        p.reserve -= take;
+      }
+    }
+  }
+
+  tickForSeq(player, seq) {
+    const t = player.seqToTick.get(seq);
+    if (t == null) return this.tick;
+    return Math.max(this.tick - 7, Math.min(this.tick, t));
+  }
+
+  liveEnemyState() {
+    if (!this.enemies) return [];
+    return this.enemies.list
+      .filter((e) => e.alive)
+      .map((e) => ({
+        id: e.id,
+        type: e.type,
+        pos: [e.pos.x, e.pos.y, e.pos.z],
+        alive: true,
+      }));
+  }
+
+  stateAtTick(tick, shooterId) {
+    const h = this.history.find((x) => x.tick === tick);
+    if (!h)
+      return {
+        players: this.players
+          .filter((p) => p.connected && p.id !== shooterId)
+          .map((p) => ({
+            id: p.id,
+            pos: [p.state.pos.x, p.state.pos.y, p.state.pos.z],
+            crouch: !!p.state.crouching,
+            alive: p.state.alive && !p.downed,
+          })),
+        enemies: this.liveEnemyState(),
+      };
+    return {
+      players: h.players.filter((p) => p.id !== shooterId),
+      enemies: h.enemies,
+    };
+  }
+
+  processFires() {
+    for (const p of this.players) {
+      if (!p.connected || !p.fireQueue || !p.fireQueue.length) continue;
+      while (p.fireQueue.length) {
+        const fire = p.fireQueue.shift();
+        if (this.time - p.lastFireAt < WEAPON.shotInterval * 0.9) continue;
+        if (p.reloadT > 0) continue;
+        if (p.ammo <= 0) {
+          this.startReload(p);
+          continue;
+        }
+        p.ammo--;
+        p.lastFireAt = this.time;
+
+        const origin = new Vector3(fire.origin[0], fire.origin[1], fire.origin[2]);
+        if (origin.distanceTo(p.state.eye) > 0.75) origin.copy(p.state.eye);
+        const dir = new Vector3(fire.dir[0], fire.dir[1], fire.dir[2]).normalize();
+        const tick = this.tickForSeq(p, fire.seq);
+        const state = this.stateAtTick(tick, p.id);
+        const hit = resolveShot(
+          this.world.physics,
+          origin,
+          dir,
+          WEAPON.range,
+          state,
+        );
+
+        let killed = false;
+        if (hit.kind === "enemy" && this.enemies) {
+          const enemy = this.enemies.byId(hit.id);
+          if (enemy && enemy.alive) {
+            const dmg =
+              WEAPON.damage *
+              (hit.part === "weak" ? WEAPON.weakPointMultiplier : 1);
+            killed = enemy.damage(dmg, hit.point, dir, hit.part) === true;
+          }
+        }
+
+        this.bus.emit("weapon:fire", { origin });
+        this.event("shot", {
+          by: p.id,
+          from: [origin.x, origin.y, origin.z],
+          to: [hit.point.x, hit.point.y, hit.point.z],
+          hit: {
+            kind: hit.kind,
+            id: hit.id || 0,
+            part: hit.part || "body",
+            point: [hit.point.x, hit.point.y, hit.point.z],
+            normal: [hit.normal.x, hit.normal.y, hit.normal.z],
+            surface: hit.surface,
+            weak: hit.part === "weak",
+            killed,
+          },
+        });
+      }
+    }
+  }
+
+  damagePlayer(player, amount, from) {
+    if (!player.state.alive || this.state !== "playing") return;
+    if (!(amount > 0)) return;
+    player.state.health = Math.max(0, player.state.health - amount);
+    this.event("hurt", {
+      playerId: player.id,
+      amount: Math.round(amount * 10) / 10,
+      from: from ? [from.x, from.y, from.z] : null,
+    });
+    if (player.state.health <= 0) {
+      player.state.alive = false;
+      player.state.enabled = false;
+      player.state.vel.set(0, 0, 0);
+      this.event("died", { playerId: player.id });
+      if (
+        !this.players.some((p) => p.connected && p.state.alive && !p.downed)
+      )
+        this.finish(false);
+    }
+  }
+
+  updateRelays(dt) {
+    if (!this.relays.length) return;
+    for (const relay of this.relays) {
+      if (relay.cut) continue;
+      let interactors = 0;
+      let by = 0;
+      for (const p of this.players) {
+        if (!p.connected || !p.state.alive || p.downed) continue;
+        if (!(p.lastBtn & BTN.INTERACT)) continue;
+        const dx = relay.pos.x - p.state.pos.x;
+        const dz = relay.pos.z - p.state.pos.z;
+        const d = Math.hypot(dx, dz);
+        if (d > MATCH.interactRange) continue;
+        if (Math.abs((relay.pos.y || 0) - p.state.pos.y) > 2.5) continue;
+        const f = p.state.forward;
+        const fl = Math.hypot(f.x, f.z) || 1;
+        if (d > 0.9 && (dx * f.x + dz * f.z) / (d * fl) < MATCH.interactFacing)
+          continue;
+        interactors++;
+        if (!by) by = p.id;
+      }
+      if (interactors > 0)
+        relay.progress = Math.min(
+          1,
+          relay.progress + (dt / MATCH.cutSeconds) * interactors,
+        );
+      else
+        relay.progress = Math.max(0, relay.progress - dt * MATCH.cutDecay);
+      if (relay.progress >= 1) {
+        relay.cut = true;
+        relay.progress = 1;
+        this.cutCount++;
+        this.event("relay", {
+          id: relay.id,
+          progress: 1,
+          cut: true,
+          by,
+        });
+        if (this.director) this.director.onCut(this.cutCount - 1);
+        if (this.cutCount >= this.relays.length) {
+          this.allCut = true;
+          this.extractT = 0;
+        }
+      }
+    }
+  }
+
+  updateExtraction(dt) {
+    if (!this.allCut) {
+      this.extractT = 0;
+      return;
+    }
+    const alive = this.players.filter(
+      (p) => p.connected && p.state.alive && !p.downed,
+    );
+    if (!alive.length) {
+      this.extractT = 0;
+      return;
+    }
+    const ext = this.world.level.extraction;
+    let inside = true;
+    for (const p of alive) {
+      const d = Math.hypot(
+        p.state.pos.x - ext.pos.x,
+        p.state.pos.z - ext.pos.z,
+      );
+      if (d > ext.radius || Math.abs(p.state.pos.y - ext.pos.y) > 3.5) {
+        inside = false;
+        break;
+      }
+    }
+    this.extractT = inside ? this.extractT + dt : 0;
+    if (this.extractT >= MATCH.extractionSeconds) this.finish(true);
+  }
+
+  recordHistory() {
+    this.history.push({
+      tick: this.tick,
+      players: this.players
+        .filter((p) => p.connected)
+        .map((p) => ({
+          id: p.id,
+          pos: [p.state.pos.x, p.state.pos.y, p.state.pos.z],
+          crouch: !!p.state.crouching,
+          alive: p.state.alive && !p.downed,
+        })),
+      enemies: this.liveEnemyState(),
+    });
+    if (this.history.length > 30) this.history.shift();
+  }
+
+  finish(won) {
+    if (this.state !== "playing" && this.state !== "countdown") return;
+    this.state = won ? "won" : "lost";
+    this.event("match", { state: this.state });
+  }
+
+  event(kind, payload = {}) {
+    this.broadcast({ t: "ev", id: this.eventId++, k: kind, ...payload });
   }
 
   sendSnapshots() {
@@ -260,6 +680,11 @@ export class Room {
   dispose() {
     this.disposed = true;
     clearInterval(this.timer);
+    if (this.enemies) {
+      try {
+        this.enemies.clear();
+      } catch {}
+    }
     this.world.city.dispose();
     this.players.length = 0;
   }
@@ -440,7 +865,10 @@ export class RoomManager {
     }
     if (player.ready) return;
     player.ready = true;
-    room.maybeStart();
+    room.maybeStart().catch((err) => {
+      console.error("[room] start failed", err);
+      reject(conn.ws, ERROR.MALFORMED, "start failed");
+    });
   }
 
   onClose(conn) {

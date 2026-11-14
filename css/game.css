@@ -96,6 +96,7 @@ body {
   margin-right: -0.16em;
   color: var(--bone);
   line-height: 1;
+  text-align: center;
 }
 .boot-sub {
   font-family: var(--f-mono);
@@ -1152,6 +1153,19 @@ body {
   color: var(--bone);
   white-space: nowrap;
   text-shadow: 0 2px 30px rgba(0, 0, 0, 0.35);
+}
+/* The English wordmark stacks onto two lines and is much longer than the
+   four-character Chinese one, so it gets its own scale. */
+html[lang="en"] .m-word {
+  font-size: clamp(52px, 11vw, 148px) !important;
+  letter-spacing: 0.1em !important;
+  line-height: 0.84 !important;
+  white-space: pre-line;
+}
+html[lang^="zh"] .m-word {
+  font-size: clamp(60px, 20vw, 150px) !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1 !important;
 }
 .m-premise {
   position: relative;
