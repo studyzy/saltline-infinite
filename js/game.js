@@ -9,6 +9,8 @@ import { createCity } from './city.js';
 import { createCityLife } from './city-life.js';
 import { VIEW, MOVE, ENEMY_TUNE, MATCH, WEAPON, PHYSICS } from '../shared/constants.js';
 import { createPhysics } from '../shared/physics.js';
+import { step as stepPlayer } from '../shared/player.js';
+import { NetClient } from '../client/net/connection.js';
 
 const _M = Object.defineProperty;
 const br = (i, e) => {
@@ -28853,6 +28855,12 @@ void main() {
         lookScale: 1,
         lastSafe: D,
         tuning: Mt,
+        coyote: 0,
+        jumpBuffer: 0,
+        airTime: 0,
+        fallSpeed: 0,
+        stepPhase: 0,
+        surface: "concrete",
         reset(F) {
           let X = F ||
             (i.level && i.level.playerStart) || { pos: new W(), yaw: 0 };
@@ -29003,7 +29011,88 @@ void main() {
         return q || "concrete";
       }
     }
+    function netTick(F) {
+      let X = i.input,
+        ne = i.weapon || {},
+        viewAds =
+          ne.stub || typeof ne.ads != "number"
+            ? (O = kn(O, C.enabled && X.ads ? 1 : 0, 14, F))
+            : Fo(ne.ads);
+      C.lookScale = bi(1, Mt.adsLook, viewAds);
+      if (C.enabled && C.alive) {
+        (C.yaw -= X.look.dx * C.lookScale),
+          (C.pitch = Zn(
+            C.pitch - X.look.dy * C.lookScale,
+            -Mt.pitchLimit,
+            Mt.pitchLimit,
+          )),
+          (C.yaw > Math.PI * 4 || C.yaw < -Math.PI * 4) &&
+            (C.yaw = C.yaw % (Math.PI * 2));
+      }
+      const cmd = {
+        mx: X.move ? X.move.x : 0,
+        my: X.move ? X.move.y : 0,
+        yaw: C.yaw,
+        pitch: C.pitch,
+        sprint: !!X.sprint,
+        crouch: !!X.crouch,
+        jumpPressed: X.pressed("jump"),
+        ads: viewAds,
+        fire: !!X.fire,
+      };
+      const events = stepPlayer(C, cmd, F, i.physics);
+      C.ads = viewAds;
+      for (const ev of events) {
+        if (ev.kind === "jump") {
+          i.events.emit("player:jump", { pos: C.pos });
+        } else if (ev.kind === "land") {
+          const ce = Math.max(0, ev.speed, 0);
+          (g.v -= Math.min(ce * Mt.landDip, 3.2)),
+            ce > 7.5 && C.addShake(Math.min(0.5, (ce - 7.5) * 0.06)),
+            i.events.emit("player:land", {
+              speed: ce,
+              surface: ev.surface,
+              pos: C.pos,
+            }),
+            (h = 0.35);
+        } else if (ev.kind === "step") {
+          i.events.emit("player:step", {
+            surface: ev.surface,
+            sprint: !!ev.sprint,
+            pos: C.pos,
+          });
+        } else if (ev.kind === "seaRescue") {
+          C.addShake(0.6), i.events.emit("player:rescued", {});
+        }
+      }
+      h = C.stepPhase;
+      const Y = Math.cos(C.yaw),
+        V = Math.sin(C.yaw),
+        k = C.vel.x * Y - C.vel.z * V;
+      (f = kn(
+        f,
+        C.onGround
+          ? Fo(C.speed / Mt.walk) *
+              (C.sprinting ? Mt.bobSprint : 1) *
+              bi(1, Mt.bobAds, C.ads) *
+              (C.crouching ? 0.7 : 1)
+          : 0,
+        9,
+        F,
+      )),
+        (d = -Math.cos(h * Math.PI * 2) * Mt.bobY * f),
+        (p = Math.sin(h * Math.PI) * Mt.bobX * f),
+        (v = kn(
+          v,
+          (-k / Mt.sprint) * Mt.rollStrafe * bi(1, 0.4, C.ads),
+          8,
+          F,
+        )),
+        K(F),
+        ie(F);
+    }
     function N(F) {
+      if (i.net && i.net.active) return netTick(F);
       let X = i.input,
         ne = i.weapon || {};
       if (
@@ -36662,6 +36751,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         <p class="m-premise" data-i18n="title_premise"></p>
         <div class="m-actions">
           <button class="btn primary" data-act="deploy" data-i18n="title_deploy"></button>
+          <button class="btn" data-act="coop" data-i18n="title_coop"></button>
           <button class="btn" data-act="settings" data-i18n="title_settings"></button>
           <button class="btn m-only-narrow" data-act="controls" data-i18n="title_controls"></button>
         </div>
@@ -37083,6 +37173,9 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         resume() {
           j(!0);
         },
+        coop() {
+          i.net && i.net.openUI();
+        },
         restart() {
           a(i.audio, "resume"),
             r.requestLock(),
@@ -37117,6 +37210,7 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         extractHint: 0,
         intensity: 0.15,
         used: new Map(),
+        mp: !1,
       },
       u = 0,
       h = Yi.introSeconds,
@@ -37143,6 +37237,15 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         },
         resume() {
           j(!1);
+        },
+        startMultiplayer() {
+          c.mp = !0;
+          H();
+          a(i.enemies, "clear");
+          l.show("none");
+          l.locationCard(!1);
+          a(i.audio, "setPaused", !1);
+          T();
         },
         update: B,
         debugCut() {
@@ -37712,8 +37815,10 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             r.pressed("pause"))
           )
             return G(), !1;
-          if ((ue(P), _.state !== "playing")) return !0;
-          X(P),
+          if (!c.mp) {
+            if ((ue(P), _.state !== "playing")) return !0;
+            X(P);
+          }
             (c.alertT = Math.max(0, c.alertT - P)),
             (c.waveHot = Math.max(0, c.waveHot - P));
           let V = ne();
@@ -37989,6 +38094,11 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
         await r("fx", "fx", () => Cf(t)),
         await r("audio", "audio", () => (i.noaudio ? dr.audio() : c_(t))),
         (t.player = x_(t)),
+        (() => {
+          try {
+            t.player.reset && t.player.reset(t.level && t.level.playerStart);
+          } catch {}
+        })(),
         (t.combat = zv(t)),
         await Nr(tr("boot_rifle"), 0.74),
         await r("weapon", "weapon", () => dm(t)),
@@ -38005,6 +38115,14 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
               console.error(
                 "[boot] city life failed: " + ((err && err.stack) || err),
               );
+            }
+          })(),
+        !n &&
+          (() => {
+            try {
+              t.net = new NetClient(t);
+            } catch (err) {
+              console.error("[boot] net init failed", err);
             }
           })(),
         t.events.on("lang:change", () => {
@@ -38108,7 +38226,8 @@ vObjP = position; vONrm = normal; vWNrm = normalize(mat3(modelMatrix) * normal);
             (u("player", p),
             u("weapon", p),
             u("enemies", p),
-            u("cityLife", p));
+            u("cityLife", p),
+            t.net && u("net", p));
         if (
           t.weapon &&
           t.weapon.setWetness &&

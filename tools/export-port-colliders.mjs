@@ -48,6 +48,10 @@ async function build() {
   game.physics = createPhysics(game);
   const level = await buildPortLevel(game);
   game.level = level;
+  // Level updaters can register collision on their first few frames (doors,
+  // gates). Run them once so the exported set matches what the browser has
+  // before the first snapshot.
+  for (let i = 0; i < 3; i++) level.update(1 / 60);
   game.physics.build();
 
   const boxes = game.physics.boxes.filter((b) => b.tag !== "city");

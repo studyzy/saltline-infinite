@@ -1,0 +1,181 @@
+/* Co-op connection panel, visually aligned with the title screen. */
+
+.mp {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  color: #dfe9e4;
+}
+
+.mp[hidden] {
+  display: none;
+}
+
+.mp-veil {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 40%, rgba(9, 14, 18, 0.55), rgba(2, 4, 6, 0.86));
+  backdrop-filter: blur(7px) saturate(0.8);
+}
+
+.mp-card {
+  position: relative;
+  width: min(420px, 92vw);
+  padding: 26px 26px 18px;
+  background: linear-gradient(165deg, rgba(13, 18, 22, 0.98), rgba(6, 9, 12, 0.98));
+  border: 1px solid rgba(148, 205, 182, 0.2);
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mp-card::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px solid rgba(148, 205, 182, 0.06);
+  pointer-events: none;
+}
+
+.mp-k {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.32em;
+  color: #7fe6c4;
+  opacity: 0.85;
+}
+
+.mp-card h2 {
+  margin: 0;
+  font-family: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.mp-sub {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.35;
+  color: rgba(223, 233, 228, 0.62);
+}
+
+.mp-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(223, 233, 228, 0.5);
+}
+
+.mp-code {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(148, 205, 182, 0.22);
+  color: #eaf5ef;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 20px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  outline: none;
+}
+
+.mp-code:focus {
+  border-color: rgba(127, 230, 196, 0.7);
+  box-shadow: 0 0 0 2px rgba(127, 230, 196, 0.12);
+}
+
+.mp-code::placeholder {
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  color: rgba(223, 233, 228, 0.3);
+}
+
+.mp-btn {
+  appearance: none;
+  border: 1px solid rgba(148, 205, 182, 0.22);
+  background: rgba(18, 26, 31, 0.9);
+  color: #dfe9e4;
+  padding: 10px 14px;
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.mp-btn:hover {
+  background: rgba(30, 44, 50, 0.95);
+  border-color: rgba(127, 230, 196, 0.55);
+}
+
+.mp-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mp-primary {
+  background: linear-gradient(180deg, rgba(127, 230, 196, 0.18), rgba(127, 230, 196, 0.08));
+  border-color: rgba(127, 230, 196, 0.45);
+}
+
+.mp-status {
+  min-height: 18px;
+  margin: 2px 0 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(223, 233, 228, 0.55);
+}
+
+.mp-status[data-kind="error"] {
+  color: #ff7a5c;
+}
+
+.mp-wait {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(127, 230, 196, 0.05);
+  border: 1px solid rgba(127, 230, 196, 0.14);
+  font-size: 13px;
+  color: rgba(223, 233, 228, 0.7);
+}
+
+.mp-wait[hidden] {
+  display: none;
+}
+
+.mp-wait code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  color: #7fe6c4;
+}
+
+.mp-wait .mp-copy {
+  margin-left: auto;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.mp-close {
+  margin-top: 4px;
+  background: transparent;
+  border-color: rgba(148, 205, 182, 0.12);
+  color: rgba(223, 233, 228, 0.55);
+}

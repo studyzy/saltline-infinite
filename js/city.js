@@ -833,51 +833,59 @@ export function createCity(game, options = {}) {
     const plan = planBlock(cx, cz);
     const geos = new Map();
     const gc = [];
-    const push = (bucketName, geo) => {
-      bucket(geos, bucketName).push(geo);
-      gc.push(geo);
-    };
+    const push = collideOnly
+      ? () => {}
+      : (bucketName, geo) => {
+          bucket(geos, bucketName).push(geo);
+          gc.push(geo);
+        };
     const boxes = planColliders(plan);
-    if (collideOnly) return { geos: null, boxes, gc: [] };
     const solid = (name, w, h, d, x, y, z, opts = {}) => {
       const ry = opts.ry || 0;
-      push(name, placed(boxGeo(w, h, d), x, y, z, ry));
+      if (!collideOnly) push(name, placed(boxGeo(w, h, d), x, y, z, ry));
       if (!opts.noCol) boxes.push(boxCol(w, h, d, x, y, z, ry, opts.surface || "concrete"));
     };
 
     if (detail < 2) {
       // Old road paint is skipped here on purpose: at 40 m it is a few pixels.
-      drawMassing(push, plan);
-      return { geos, boxes, gc };
+      if (!collideOnly) drawMassing(push, plan);
+      return { geos: collideOnly ? null : geos, boxes, gc };
     }
 
     // Detail decoration draws from its own stream, so adding or removing a
     // window, a rib or a roof unit can never move a container.
     const r = stream(cx * 13 + 5, cz * 29 - 3);
 
-    push(MAT.pave, placed(boxGeo(plan.lw, KERB, plan.ld), plan.lx + plan.lw / 2, KERB / 2, plan.lz + plan.ld / 2));
-    push(MAT.kerb, placed(boxGeo(plan.lw + 0.3, 0.06, 0.3), plan.lx + plan.lw / 2, KERB + 0.03, plan.lz + plan.ld));
-    push(MAT.kerb, placed(boxGeo(0.3, 0.06, plan.ld + 0.3), plan.lx + plan.lw, KERB + 0.03, plan.lz + plan.ld / 2));
+    if (!collideOnly) {
+      push(MAT.pave, placed(boxGeo(plan.lw, KERB, plan.ld), plan.lx + plan.lw / 2, KERB / 2, plan.lz + plan.ld / 2));
+      push(MAT.kerb, placed(boxGeo(plan.lw + 0.3, 0.06, 0.3), plan.lx + plan.lw / 2, KERB + 0.03, plan.lz + plan.ld));
+      push(MAT.kerb, placed(boxGeo(0.3, 0.06, plan.ld + 0.3), plan.lx + plan.lw, KERB + 0.03, plan.lz + plan.ld / 2));
 
-    // road paint on the west/south strips
-    for (let k = 0; k < 3; k++) {
-      const t = plan.z0 + 6 + k * 12;
-      const dash = new THREE.PlaneGeometry(0.16, 4).rotateX(-Math.PI / 2);
-      dash.translate(plan.x0 + ROAD * 0.5, 0.02, t);
-      push(MAT.paintY, dash.toNonIndexed());
+      // road paint on the west/south strips
+      for (let k = 0; k < 3; k++) {
+        const t = plan.z0 + 6 + k * 12;
+        const dash = new THREE.PlaneGeometry(0.16, 4).rotateX(-Math.PI / 2);
+        dash.translate(plan.x0 + ROAD * 0.5, 0.02, t);
+        push(MAT.paintY, dash.toNonIndexed());
+      }
+      for (let k = 0; k < 3; k++) {
+        const dash = new THREE.PlaneGeometry(4, 0.16).rotateX(-Math.PI / 2);
+        dash.translate(plan.x0 + 20 + k * 6, 0.02, plan.z0 + ROAD * 0.5);
+        push(MAT.paintY, dash.toNonIndexed());
+      }
     }
-    for (let k = 0; k < 3; k++) {
-      const dash = new THREE.PlaneGeometry(4, 0.16).rotateX(-Math.PI / 2);
-      dash.translate(plan.x0 + 20 + k * 6, 0.02, plan.z0 + ROAD * 0.5);
-      push(MAT.paintY, dash.toNonIndexed());
+
+    if (plan.type === "yard") {
+      if (!collideOnly) drawYard(push, plan);
+    } else {
+      for (const t of plan.towers) buildTower(push, solid, r, t, plan.baseY);
+    }
+    if (!collideOnly) {
+      drawProps(push, plan);
+      drawLamp(push, plan);
     }
 
-    if (plan.type === "yard") drawYard(push, plan);
-    else for (const t of plan.towers) buildTower(push, solid, r, t, plan.baseY);
-    drawProps(push, plan);
-    drawLamp(push, plan);
-
-    return { geos, boxes, gc };
+    return { geos: collideOnly ? null : geos, boxes, gc };
   }
 
   // ---- silhouettes out to the horizon ------------------------------------
@@ -1012,7 +1020,6 @@ export function createCity(game, options = {}) {
   let lastFocusKey = "";
 
   function detailFor(cx, cz) {
-    if (collideOnly) return 1;
     let best = Infinity;
     for (const f of focusCells) {
       const ring = Math.max(Math.abs(cx - f.x), Math.abs(cz - f.z));
@@ -1195,14 +1202,27 @@ export function createCity(game, options = {}) {
   // Server-side helper: build every queued near block now instead of spreading
   // the work across frames, so a player never reaches a street with no
   // collision yet.
-  function flush() {
+  function flushNear() {
+    const farJobs = [];
     while (pending.length) {
       const job = pending.shift();
       if (job.far) {
-        if (wantFar.has(job.cx + "," + job.cz)) addFar(job.cx, job.cz);
+        farJobs.push(job);
       } else if (wantNear.has(job.cx + "," + job.cz)) {
         addNear(job.cx, job.cz);
       }
+    }
+    pending.length = 0;
+    for (const job of farJobs) pending.push(job);
+    queued = pending.length;
+  }
+
+  function flush() {
+    flushNear();
+    while (pending.length) {
+      const job = pending.shift();
+      if (job.far && wantFar.has(job.cx + "," + job.cz))
+        addFar(job.cx, job.cz);
     }
     queued = 0;
     if (!collideOnly) rebuildFarBatch();
@@ -1311,6 +1331,12 @@ export function createCity(game, options = {}) {
         setShadowFollow(!inPort(first.x, first.z), first.x, first.z);
     },
     flush,
+    flushNear,
+    debugCells: () => ({
+      focus: focusCells.map((c) => c.x + "," + c.z),
+      want: [...wantNear].sort(),
+      built: [...nearCells.keys()].sort(),
+    }),
     // A spawn point for the pursuit waves: open ground 22-34 m out, behind the
     // player's back where possible. `seed` (0..1) rotates the candidate order
     // so repeated waves scatter instead of stacking on one square metre.
