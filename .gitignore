@@ -1,2 +1,3 @@
 # Written at deploy time by tools/make-version.sh from the git commit.
 version.json
+node_modules/

@@ -1,0 +1,16 @@
+{
+  "name": "saltline-infinite",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test",
+    "export:colliders": "node tools/export-port-colliders.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.23.0"
+  }
+}
