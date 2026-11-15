@@ -57,7 +57,12 @@ export class NetClient {
     this.disconnect();
     this.intentional = false;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}/ws`;
+    // The socket sits next to the page, not at the site root: this game can be
+    // mounted under a sub-path (the live site is /shoot/), and the root /ws on
+    // that host belongs to a different app. Served from the root by
+    // `npm start`, the base is "/" and this is still the plain /ws.
+    const base = location.pathname.replace(/[^/]*$/, "");
+    const url = `${proto}//${location.host}${base}ws`;
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.addEventListener("open", () => {

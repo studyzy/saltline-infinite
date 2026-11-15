@@ -3,10 +3,12 @@
 # 后端 systemd: saltline.service（node server/index.js，127.0.0.1:8091）
 redir /shoot /shoot/ 308
 
-# 客户端连的是 wss://<host>/ws（client/net/connection.js 用的是 location.host，
-# 路径固定 /ws），所以站点根上的 /ws 必须转给后端。Caddy 的 reverse_proxy
-# 自己处理 Upgrade，不需要额外指令。
-handle /ws {
+# 联机 WebSocket 不放在根路径 /ws —— 那个路径属于 pvz-shoot（同机另一款游戏，
+# 它的 route 片段按字母序先加载，早就占了 /ws，连过去会收到它的 matchId/seat
+# 协议）。盐线的 socket 跟着页面走：页面在 /shoot/，客户端连 /shoot/ws，
+# 这里剥掉前缀再转给后端，后端仍然只认 /ws。
+handle /shoot/ws {
+	uri strip_prefix /shoot
 	reverse_proxy 127.0.0.1:8091
 }
 
