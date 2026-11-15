@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Saltline — Avatar Lab</title>
+    <link rel="stylesheet" href="./lab.css" />
+    <script>
+      if (location.protocol === "file:") {
+        document.documentElement.innerHTML =
+          '<body><div id="filewarn" style="display:block"><h2 style="font-size:16px;letter-spacing:.08em">Serve this page over HTTP</h2>' +
+          "<p>ES modules do not load from file://. From the repo root run</p>" +
+          "<p><code>python3 -m http.server 8733</code></p>" +
+          "<p>then open <code>http://localhost:8733/tools/dev/avatar-preview.html</code></p></div></body>";
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="ui">
+      <h1>SALTLINE <b>// AVATAR LAB</b></h1>
+      <div class="sub">co-op operator · procedural tactical rig</div>
+
+      <div class="group">
+        <label>Pose</label>
+        <div class="row" id="poses">
+          <button data-pose="idle" class="on">Idle</button>
+          <button data-pose="walk">Walk</button>
+          <button data-pose="run">Run</button>
+          <button data-pose="crouch">Crouch</button>
+          <button data-pose="downed">Downed</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Move speed</label>
+        <div class="slider">
+          <input id="speed" type="range" min="0" max="6" step="0.1" value="0" />
+          <output id="speedOut">0.0</output>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Camera</label>
+        <div class="row" id="cams">
+          <button data-cam="front">Front</button>
+          <button data-cam="three" class="on">3/4</button>
+          <button data-cam="side">Side</button>
+          <button data-cam="back">Back</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Inspect</label>
+        <div class="row" id="closeups">
+          <button data-close="head">Head</button>
+          <button data-close="torso">Torso</button>
+          <button data-close="hands">Hands</button>
+          <button data-close="rifle">Rifle</button>
+          <button data-close="boots">Boots</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>View</label>
+        <div class="row">
+          <button id="turntable">Turntable</button>
+          <button id="wire">Wireframe</button>
+          <button id="gridBtn" class="on">Grid</button>
+          <button id="night">Night light</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stats"></div>
+    <div id="hint">drag to orbit · wheel to zoom · 1–5 poses</div>
+    <nav id="labnav">
+      <a href="./avatar-preview.html" class="on">Avatar</a>
+      <a href="./avatar-refs.html">Refs</a>
+      <a href="./drone-preview.html">Drone</a>
+      <a href="./hound-preview.html">Hound</a>
+      <a href="./weapon-preview.html">Weapon</a>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "../../shared/three.js";
+      import { Avatar } from "../../client/net/avatar.js";
+      import { PAC9_SPEC } from "../../js/weapon.js";
+      import {
+        bindKeys,
+        collectMaterials,
+        createViewer,
+        setWireframe,
+        triangleCount,
+      } from "./lab.js";
+
+      const canvas = document.getElementById("view");
+      const viewer = createViewer(canvas, {
+        fov: 40,
+        target: [0, 1.02, 0],
+        az: Math.PI * 0.74,
+        el: 0.16,
+        dist: 3.35,
+        minDist: 0.28,
+        maxDist: 12,
+        groundSize: 160,
+        gridSize: 96,
+        gridDivisions: 64,
+        fog: [28, 120],
+      });
+      window.__viewer = viewer;
+      window.__camera = viewer.camera;
+      window.__orbit = viewer.orbit;
+
+      const avatar = new Avatar({ scene: viewer.scene });
+      window.__avatar = avatar;
+      window.__pac9Spec = PAC9_SPEC;
+      window.__avatarFistOffset = [0, -0.052, 0.04];
+      avatar.group.visible = true;
+      avatar.state = "alive";
+      avatar.hp = 100;
+      avatar.crouchK = 0;
+      avatar.downK = 0;
+      avatar.speed = 0;
+      avatar.t = 0;
+
+      const modelMaterials = collectMaterials(avatar.group);
+      const bodyMeshes = [];
+      const rifleMeshes = [];
+      avatar.group.traverse((node) => {
+        if (node.isMesh && node.name.startsWith("avatar-")) bodyMeshes.push(node);
+      });
+      if (avatar.propRoot) avatar.propRoot.traverse((node) => node.isMesh && rifleMeshes.push(node));
+
+      const textureIds = new Set();
+      let texBytes = 0;
+      for (const material of modelMaterials) {
+        for (const texture of [material.map, material.normalMap, material.roughnessMap, material.metalnessMap]) {
+          if (!texture || textureIds.has(texture.uuid)) continue;
+          textureIds.add(texture.uuid);
+          const width = texture.image?.width || 0;
+          const height = texture.image?.height || 0;
+          texBytes += width * height * 4 * (4 / 3);
+        }
+      }
+      const bodyTris = triangleCount({ traverse: (visit) => bodyMeshes.forEach(visit) });
+      const rifleTris = triangleCount({ traverse: (visit) => rifleMeshes.forEach(visit) });
+      document.getElementById("stats").innerHTML =
+        `<b>${(bodyTris + rifleTris).toLocaleString()}</b> tris total<br>` +
+        `<b>${bodyTris.toLocaleString()}</b> body · <b>${rifleTris.toLocaleString()}</b> PAC-9<br>` +
+        `<b>${avatar.rig.bones.length}</b> bones · <b>${modelMaterials.length}</b> materials<br>` +
+        `<b>${(texBytes / 1048576).toFixed(1)}</b> MB tex`;
+
+      const PRESETS = {
+        front: { az: Math.PI, el: 0.1, dist: 3.35, y: 0.98 },
+        three: { az: Math.PI * 0.74, el: 0.16, dist: 3.35, y: 0.98 },
+        side: { az: Math.PI * 0.5, el: 0.1, dist: 3.35, y: 0.98 },
+        back: { az: 0, el: 0.14, dist: 3.35, y: 0.98 },
+      };
+      const CLOSEUPS = {
+        head: { az: Math.PI * 0.93, el: 0.04, dist: 0.62, y: 1.6 },
+        torso: { az: Math.PI * 0.86, el: 0.04, dist: 1.02, y: 1.18 },
+        hands: { az: Math.PI * 0.7, el: -0.05, dist: 0.72, y: 1.12 },
+        rifle: { az: Math.PI * 0.4, el: 0.02, dist: 0.92, y: 1.12 },
+        boots: { az: Math.PI * 0.88, el: 0.22, dist: 0.82, y: 0.16 },
+      };
+      let frameY = 0.98;
+      let poseName = "idle";
+      let wire = false;
+
+      const POSES = {
+        idle: { speed: 0, crouch: false, down: false },
+        walk: { speed: 2.4, crouch: false, down: false },
+        run: { speed: 5.2, crouch: false, down: false },
+        crouch: { speed: 1.1, crouch: true, down: false },
+        downed: { speed: 0, crouch: false, down: true },
+      };
+      const state = {
+        speed: 0,
+        crouch: 0,
+        down: 0,
+        targetSpeed: 0,
+        targetCrouch: 0,
+        targetDown: 0,
+      };
+
+      function setPose(name) {
+        const pose = POSES[name];
+        if (!pose) return;
+        poseName = name;
+        state.targetSpeed = pose.speed;
+        state.targetCrouch = pose.crouch ? 1 : 0;
+        state.targetDown = pose.down ? 1 : 0;
+        speedInput.value = String(pose.speed);
+        speedOut.textContent = pose.speed.toFixed(1);
+        document.querySelectorAll("#poses button").forEach((button) =>
+          button.classList.toggle("on", button.dataset.pose === name),
+        );
+      }
+
+      const speedInput = document.getElementById("speed");
+      const speedOut = document.getElementById("speedOut");
+      speedInput.addEventListener("input", () => {
+        state.targetSpeed = parseFloat(speedInput.value);
+        poseName = "custom";
+        speedOut.textContent = state.targetSpeed.toFixed(1);
+        document.querySelectorAll("#poses button").forEach((button) => button.classList.remove("on"));
+      });
+      document.querySelectorAll("#poses button").forEach((button) =>
+        button.addEventListener("click", () => setPose(button.dataset.pose)),
+      );
+
+      function clearSelection(group) {
+        document.querySelectorAll(group + " button").forEach((button) => button.classList.remove("on"));
+      }
+      document.querySelectorAll("#cams button").forEach((button) =>
+        button.addEventListener("click", () => {
+          const preset = PRESETS[button.dataset.cam];
+          viewer.orbit.az = preset.az;
+          viewer.orbit.el = preset.el;
+          viewer.orbit.dist = preset.dist;
+          frameY = preset.y;
+          viewer.orbit.target.y = frameY;
+          clearSelection("#closeups");
+          document.querySelectorAll("#cams button").forEach((other) => other.classList.toggle("on", other === button));
+        }),
+      );
+      document.querySelectorAll("#closeups button").forEach((button) =>
+        button.addEventListener("click", () => {
+          const close = CLOSEUPS[button.dataset.close];
+          viewer.orbit.az = close.az;
+          viewer.orbit.el = close.el;
+          viewer.orbit.dist = close.dist;
+          frameY = close.y;
+          viewer.orbit.target.y = frameY;
+          clearSelection("#cams");
+          document.querySelectorAll("#closeups button").forEach((other) => other.classList.toggle("on", other === button));
+        }),
+      );
+
+      const turntableBtn = document.getElementById("turntable");
+      turntableBtn.addEventListener("click", () => {
+        viewer.turntable = !viewer.turntable;
+        turntableBtn.classList.toggle("on", viewer.turntable);
+      });
+      const wireBtn = document.getElementById("wire");
+      wireBtn.addEventListener("click", () => {
+        wire = !wire;
+        wireBtn.classList.toggle("on", wire);
+        setWireframe(modelMaterials, wire);
+      });
+      const gridBtn = document.getElementById("gridBtn");
+      gridBtn.addEventListener("click", () => {
+        viewer.setGrid(!viewer.grid.visible);
+        gridBtn.classList.toggle("on", viewer.grid.visible);
+      });
+      const nightBtn = document.getElementById("night");
+      let nightOn = false;
+      nightBtn.addEventListener("click", () => {
+        nightOn = !nightOn;
+        nightBtn.classList.toggle("on", nightOn);
+        viewer.setNight(nightOn);
+      });
+
+      bindKeys({
+        1: () => setPose("idle"),
+        2: () => setPose("walk"),
+        3: () => setPose("run"),
+        4: () => setPose("crouch"),
+        5: () => setPose("downed"),
+        r: () => turntableBtn.click(),
+        R: () => turntableBtn.click(),
+      });
+
+      const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
+      setPose("idle");
+      viewer.start((dt) => {
+        state.speed = damp(state.speed, state.targetSpeed, 9, dt);
+        state.crouch = damp(state.crouch, state.targetCrouch, 10, dt);
+        state.down = damp(state.down, state.targetDown, 6.5, dt);
+        avatar.speed = state.speed;
+        avatar.crouchK = state.crouch;
+        avatar.downK = state.down;
+        avatar.state = state.down > 0.5 ? "downed" : "alive";
+        avatar.t += dt;
+        avatar.poseBody([0, 0, 0], 0, 0, dt);
+        viewer.orbit.target.y = frameY - state.down * 0.58;
+      });
+    </script>
+  </body>
+</html>

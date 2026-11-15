@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Saltline — Avatar vs Reference</title>
+    <link rel="stylesheet" href="./lab.css" />
+    <script type="importmap">
+      { "imports": { "three": "../../shared/three.js" } }
+    </script>
+    <style>
+      #ui { width: 300px; }
+      #legend {
+        position: fixed; left: 16px; bottom: 14px;
+        display: flex; gap: 10px; align-items: center;
+        padding: 6px 10px; background: var(--panel); border: 1px solid var(--line);
+        border-radius: 6px; color: var(--dim); font-size: 10px; letter-spacing: .06em;
+        backdrop-filter: blur(8px);
+      }
+      #legend b { color: var(--accent); font-weight: 600; }
+      #modebar { display: flex; gap: 4px; flex-wrap: wrap; }
+      #modebar button { flex: 1 1 60px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="ui">
+      <h1>SALTLINE <b>// AVATAR vs REF</b></h1>
+      <div class="sub">procedural operator beside soldier_tac.glb · same stage, same light</div>
+      <div class="group">
+        <label>Frame</label>
+        <div class="row" id="modebar">
+          <button data-view="full" class="on">Full</button>
+          <button data-view="head">Head</button>
+          <button data-view="side">Side</button>
+          <button data-view="torso">Torso</button>
+          <button data-view="legs">Legs</button>
+        </div>
+      </div>
+      <div class="group">
+        <label>View</label>
+        <div class="row">
+          <button id="turntable">Turntable</button>
+          <button id="gridBtn" class="on">Grid</button>
+          <button id="night">Night light</button>
+        </div>
+      </div>
+    </div>
+    <div id="legend"><b>LEFT</b> soldier_tac.glb &nbsp;·&nbsp; <b>RIGHT</b> client/net/avatar.js</div>
+    <div id="hint">1–4 frame · drag to orbit · wheel to zoom</div>
+    <nav id="labnav">
+      <a href="./avatar-preview.html">Avatar</a>
+      <a href="./avatar-refs.html">Refs</a>
+      <a href="./drone-preview.html">Drone</a>
+      <a href="./hound-preview.html">Hound</a>
+      <a href="./weapon-preview.html">Weapon</a>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "../../shared/three.js";
+      import { GLTFLoader } from "./vendor/GLTFLoader.js";
+      import { Avatar } from "../../client/net/avatar.js";
+      import { bindKeys, createViewer } from "./lab.js";
+
+      const canvas = document.getElementById("view");
+      const viewer = createViewer(canvas, {
+        fov: 38,
+        target: [0, 0.95, 0],
+        az: 0,
+        el: 0.08,
+        dist: 4.4,
+        minDist: 0.2,
+        maxDist: 20,
+        groundSize: 120,
+        gridSize: 60,
+        gridDivisions: 60,
+        fog: [26, 80],
+      });
+      window.__viewer = viewer;
+
+      // Reference: hide the broken extra meshes and headphone set exactly the
+      // way avatar-refs.html does, then drop them from the graph so the height
+      // normalisation measures the soldier we actually see.
+      const refRoot = new THREE.Group();
+      refRoot.name = "reference";
+      refRoot.position.x = -0.55;
+      viewer.scene.add(refRoot);
+
+      const avatar = new Avatar({ scene: viewer.scene, mats: null });
+      avatar.group.visible = true;
+      avatar.state = "alive";
+      avatar.speed = 0;
+      window.__avatar = avatar;
+
+      const loader = new GLTFLoader();
+      let refModel = null;
+
+      loader.load("./assets/refs/soldier_tac.glb", (gltf) => {
+        refModel = gltf.scene;
+        const dead = [];
+        refModel.traverse((node) => {
+          if (!node.isMesh) return;
+          const names = (Array.isArray(node.material) ? node.material : [node.material])
+            .map((m) => m?.name);
+          if (node.name === "0" || names.includes("HeadphonesT")) dead.push(node);
+          else {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            node.frustumCulled = false;
+          }
+        });
+        for (const node of dead) node.removeFromParent();
+
+        const box = new THREE.Box3().setFromObject(refModel);
+        const size = box.getSize(new THREE.Vector3());
+        if (size.y > 0.001) refModel.scale.multiplyScalar(1.78 / size.y);
+        refModel.updateMatrixWorld(true);
+        const scaled = new THREE.Box3().setFromObject(refModel);
+        const center = scaled.getCenter(new THREE.Vector3());
+        refModel.position.x -= center.x;
+        refModel.position.z -= center.z;
+        refModel.position.y -= scaled.min.y;
+        refRoot.add(refModel);
+        viewer.scene.updateMatrixWorld(true);
+      });
+
+      // ---- framing ---------------------------------------------------------
+      const VIEWS = {
+        full: { y: 0.92, dist: 4.3, el: 0.06, gap: 0.55, az: 0 },
+        head: { y: 1.66, dist: 1.0, el: 0.01, gap: 0.21, az: 0 },
+        side: { y: 1.63, dist: 1.05, el: 0.02, gap: 0, gapZ: 0.34, az: Math.PI / 2 },
+        torso: { y: 1.24, dist: 1.7, el: 0.02, gap: 0.42, az: 0 },
+        legs: { y: 0.42, dist: 1.7, el: 0.04, gap: 0.42, az: 0 },
+      };
+      let view = "full";
+      function setView(name) {
+        if (!VIEWS[name]) return;
+        view = name;
+        const v = VIEWS[name];
+        viewer.orbit.target.set(0, v.y, 0);
+        viewer.orbit.dist = v.dist;
+        viewer.orbit.el = v.el;
+        viewer.orbit.az = v.az;
+        refRoot.position.set(-(v.gap || 0), 0, -(v.gapZ || 0));
+        document.querySelectorAll("#modebar button").forEach((b) =>
+          b.classList.toggle("on", b.dataset.view === name),
+        );
+      }
+      window.__cmp = { setView, viewer, avatar, get ref() { return refModel; } };
+      document.querySelectorAll("#modebar button").forEach((b) =>
+        b.addEventListener("click", () => setView(b.dataset.view)),
+      );
+
+      document.getElementById("turntable").addEventListener("click", (e) => {
+        viewer.turntable = !viewer.turntable;
+        e.currentTarget.classList.toggle("on", viewer.turntable);
+      });
+      document.getElementById("gridBtn").addEventListener("click", (e) => {
+        viewer.setGrid(!viewer.grid.visible);
+        e.currentTarget.classList.toggle("on", viewer.grid.visible);
+      });
+      let nightOn = false;
+      document.getElementById("night").addEventListener("click", (e) => {
+        nightOn = !nightOn;
+        e.currentTarget.classList.toggle("on", nightOn);
+        viewer.setNight(nightOn);
+      });
+      bindKeys({
+        1: () => setView("full"),
+        2: () => setView("head"),
+        3: () => setView("torso"),
+        4: () => setView("legs"),
+      });
+
+      viewer.start((dt) => {
+        avatar.t += dt;
+        const v = VIEWS[view];
+        avatar.poseBody([v.gap || 0, 0, v.gapZ || 0], Math.PI, 0, dt);
+      });
+    </script>
+  </body>
+</html>

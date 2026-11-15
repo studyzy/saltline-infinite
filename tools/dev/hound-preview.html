@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Saltline — Hound Lab</title>
+    <link rel="stylesheet" href="./lab.css" />
+    <script>
+      if (location.protocol === "file:") {
+        document.documentElement.innerHTML =
+          '<body><div id="filewarn" style="display:block"><h2 style="font-size:16px;letter-spacing:.08em">Serve this page over HTTP</h2>' +
+          "<p>ES modules do not load from file://. From the repo root run</p>" +
+          "<p><code>python3 -m http.server 8733</code></p>" +
+          "<p>then open <code>http://localhost:8733/tools/dev/hound-preview.html</code></p></div></body>";
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="ui">
+      <h1>SALTLINE <b>// HOUND LAB</b></h1>
+      <div class="sub">quadruped attack robot · procedural rig</div>
+
+      <div class="group">
+        <label>Behaviour</label>
+        <div class="row" id="modes">
+          <button data-mode="idle" class="on">Idle</button>
+          <button data-mode="walk">Walk</button>
+          <button data-mode="run">Run</button>
+          <button data-mode="lunge">Lunge</button>
+          <button data-mode="death">Death</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Time scale</label>
+        <div class="slider">
+          <input id="speed" type="range" min="0" max="1.5" step="0.05" value="1" />
+          <output id="speedOut">1.00×</output>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Camera</label>
+        <div class="row" id="cams">
+          <button data-cam="front">Front</button>
+          <button data-cam="three" class="on">3/4</button>
+          <button data-cam="side">Side</button>
+          <button data-cam="back">Back</button>
+          <button data-cam="top">Top</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>View</label>
+        <div class="row">
+          <button id="turntable">Turntable</button>
+          <button id="wire">Wireframe</button>
+          <button id="gridBtn" class="on">Grid</button>
+          <button id="night">Night light</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stats"></div>
+    <div id="hint">drag to orbit · wheel to zoom · space to pause</div>
+    <nav id="labnav">
+      <a href="./avatar-preview.html">Avatar</a>
+      <a href="./avatar-refs.html">Refs</a>
+      <a href="./drone-preview.html">Drone</a>
+      <a href="./hound-preview.html" class="on">Hound</a>
+      <a href="./weapon-preview.html">Weapon</a>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "../../shared/three.js";
+      import { buildHoundRig, createHound } from "../../js/hound.js";
+      import {
+        bindKeys,
+        collectMaterials,
+        createHost,
+        createViewer,
+        makeRigMaterials,
+        mergeSimple,
+        setWireframe,
+        triangleCount,
+      } from "./lab.js";
+
+      const canvas = document.getElementById("view");
+      const viewer = createViewer(canvas, {
+        fov: 38,
+        target: [0, 0.55, 0],
+        az: Math.PI * 0.22,
+        el: 0.26,
+        dist: 3,
+        minDist: 0.35,
+        maxDist: 40,
+        groundSize: 400,
+        gridSize: 120,
+        gridDivisions: 60,
+        gridFollow: true,
+        fog: [26, 110],
+      });
+
+      // ---- model ----------------------------------------------------------
+      const materials = makeRigMaterials();
+      const host = createHost({
+        scene: viewer.scene,
+        camera: viewer.camera,
+        nav: {
+          findPath: () => null,
+          randomPoint: (center) => center.clone(),
+          isWalkable: () => true,
+        },
+      });
+
+      let mode = "idle";
+
+      const dummy = {
+        pos: new THREE.Vector3(0, 0, 2.2),
+        vel: new THREE.Vector3(),
+        eye: new THREE.Vector3(0, 0.7, 2.2),
+        alive: true,
+        speed: 0,
+        damage() {},
+      };
+
+      const ai = {
+        G: host,
+        rng: Math.random,
+        t: 0,
+        list: [],
+        playerSpeed: 0,
+        think(hound) {
+          if (mode === "walk" || mode === "run") {
+            hound.mode = "investigate";
+            hound.los = false;
+            hound.hasGoal = false;
+            const ahead = mode === "walk" ? 7 : 20;
+            hound.lastKnown.set(
+              hound.pos.x + Math.sin(hound.yaw) * ahead,
+              0,
+              hound.pos.z + Math.cos(hound.yaw) * ahead,
+            );
+          } else if (mode === "lunge") {
+            hound.mode = "engage";
+            hound.los = true;
+            hound.noSeeT = 0;
+            hound.seeT = 1;
+            hound.cool = 999; // no gunfire in the lunge demo
+            if (hound.es !== "lunge") hound.lungeCd = 0;
+            // Keep the target a pounce-length ahead so the loop stays on screen.
+            dummy.pos.set(
+              hound.pos.x + Math.sin(hound.yaw) * 2.2,
+              0,
+              hound.pos.z + Math.cos(hound.yaw) * 2.2,
+            );
+            marker.position.copy(dummy.pos);
+          } else {
+            hound.mode = "patrol";
+            hound.los = false;
+          }
+        },
+        requestToken: () => true,
+        releaseToken() {},
+        provoke() {},
+        addWreck() {},
+        retire() {},
+        mergeSimple,
+      };
+
+      const rigDef = buildHoundRig();
+      const hound = createHound(ai, rigDef, materials, 0);
+      viewer.scene.add(hound.rig.group);
+
+      // ---- lunge marker ---------------------------------------------------
+      const marker = new THREE.Group();
+      const markerMat = new THREE.MeshBasicMaterial({
+        color: 0xff5a33,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.06, 0), markerMat);
+      orb.position.y = 0.55;
+      const ringGeo = new THREE.RingGeometry(0.2, 0.24, 32);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(ringGeo, markerMat);
+      ring.position.y = 0.01;
+      const pin = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.005, 0.005, 0.55, 8, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xff5a33,
+          transparent: true,
+          opacity: 0.3,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      pin.position.y = 0.275;
+      marker.add(orb, ring, pin);
+      marker.position.copy(dummy.pos);
+      marker.visible = false;
+      viewer.scene.add(marker);
+
+      // ---- modes ----------------------------------------------------------
+      const ORIGIN = new THREE.Vector3(0, 0, 0);
+      const MODE_DEFS = {
+        idle: { dist: 3.2, targetY: 0.55 },
+        walk: { dist: 3.2, targetY: 0.55 },
+        run: { dist: 3.3, targetY: 0.55 },
+        lunge: { dist: 4.4, targetY: 0.55 },
+        death: { dist: 3.2, targetY: 0.35 },
+      };
+      // The lunge demo forces a side view; other modes return to the last
+      // preset the user picked.
+      const lastView = { az: Math.PI * 0.22, el: 0.26 };
+
+      function applyMode(name) {
+        const previous = mode;
+        mode = name;
+        host.player = name === "lunge" ? dummy : null;
+        marker.visible = name === "lunge";
+
+        hound._deactivate();
+        hound.isRemote = false;
+        hound._activate(ORIGIN, {
+          passive: name !== "lunge",
+          patrolRadius: 0.01,
+          yaw: 0,
+        });
+        if (name === "death") {
+          hound.damage(1e6, hound.headPos, null);
+        }
+
+        viewer.orbit.target.set(0, MODE_DEFS[name].targetY, 0);
+        viewer.orbit.dist = MODE_DEFS[name].dist;
+        if (name === "lunge") {
+          viewer.orbit.az = Math.PI * 0.5;
+          viewer.orbit.el = 0.16;
+          marker.position.copy(dummy.pos);
+        } else if (previous === "lunge") {
+          viewer.orbit.az = lastView.az;
+          viewer.orbit.el = lastView.el;
+        }
+        for (const b of document.querySelectorAll("#modes button"))
+          b.classList.toggle("on", b.dataset.mode === name);
+      }
+
+      for (const b of document.querySelectorAll("#modes button"))
+        b.addEventListener("click", () => applyMode(b.dataset.mode));
+
+      // ---- camera presets -------------------------------------------------
+      const PRESETS = {
+        front: { az: 0, el: 0.22 },
+        three: { az: Math.PI * 0.22, el: 0.26 },
+        side: { az: Math.PI * 0.5, el: 0.2 },
+        back: { az: Math.PI, el: 0.26 },
+        top: { az: Math.PI * 0.22, el: 1.1 },
+      };
+      for (const b of document.querySelectorAll("#cams button"))
+        b.addEventListener("click", () => {
+          const p = PRESETS[b.dataset.cam];
+          lastView.az = p.az;
+          lastView.el = p.el;
+          viewer.orbit.az = p.az;
+          viewer.orbit.el = p.el;
+          viewer.orbit.dist = b.dataset.cam === "top" ? 4 : b.dataset.cam === "side" ? 3.8 : MODE_DEFS[mode].dist;
+          for (const o of document.querySelectorAll("#cams button"))
+            o.classList.toggle("on", o === b);
+        });
+
+      // ---- view toggles ---------------------------------------------------
+      const turntableBtn = document.getElementById("turntable");
+      turntableBtn.addEventListener("click", () => {
+        viewer.turntable = !viewer.turntable;
+        turntableBtn.classList.toggle("on", viewer.turntable);
+      });
+
+      const modelMaterials = collectMaterials(hound.rig.group);
+      const wireMaterials = modelMaterials.filter((m) => m.name !== "label");
+      const wireBtn = document.getElementById("wire");
+      let wire = false;
+      wireBtn.addEventListener("click", () => {
+        wire = !wire;
+        wireBtn.classList.toggle("on", wire);
+        setWireframe(wireMaterials, wire);
+      });
+
+      const gridBtn = document.getElementById("gridBtn");
+      gridBtn.addEventListener("click", () => {
+        viewer.setGrid(!viewer.grid.visible);
+        gridBtn.classList.toggle("on", viewer.grid.visible);
+      });
+
+      const nightBtn = document.getElementById("night");
+      let nightOn = false;
+      nightBtn.addEventListener("click", () => {
+        nightOn = !nightOn;
+        nightBtn.classList.toggle("on", nightOn);
+        viewer.setNight(nightOn);
+      });
+
+      // ---- time scale -----------------------------------------------------
+      const speedInput = document.getElementById("speed");
+      const speedOut = document.getElementById("speedOut");
+      let timeScale = 1;
+      speedInput.addEventListener("input", () => {
+        timeScale = parseFloat(speedInput.value);
+        speedOut.textContent = timeScale.toFixed(2) + "×";
+      });
+
+      let paused = false;
+      const hint = document.getElementById("hint");
+      const HINT = "drag to orbit · wheel to zoom · space to pause";
+      bindKeys({
+        " ": () => {
+          paused = !paused;
+          hint.textContent = paused ? "paused — space to resume" : HINT;
+        },
+        1: () => applyMode("idle"),
+        2: () => applyMode("walk"),
+        3: () => applyMode("run"),
+        4: () => applyMode("lunge"),
+        5: () => applyMode("death"),
+      });
+
+      // ---- stats ----------------------------------------------------------
+      document.getElementById("stats").innerHTML =
+        `<b>${triangleCount(hound.rig.group).toLocaleString()}</b> tris<br>` +
+        `<b>${hound.rig.skeleton.bones.length}</b> bones<br>` +
+        `<b>${modelMaterials.length}</b> materials`;
+
+      // ---- loop -----------------------------------------------------------
+      const follow = new THREE.Vector3();
+      applyMode("idle");
+
+      viewer.start((dt) => {
+        if (!paused && timeScale > 0) {
+          const step = dt * timeScale;
+          ai.t += step;
+          hound._update(step);
+        }
+
+        if (mode !== "idle") {
+          const lead = mode === "lunge" ? 0.9 : 0;
+          follow.set(
+            hound.pos.x + Math.sin(hound.yaw) * lead,
+            MODE_DEFS[mode].targetY,
+            hound.pos.z + Math.cos(hound.yaw) * lead,
+          );
+          viewer.orbit.target.lerp(follow, 1 - Math.exp(-8 * dt));
+        }
+      });
+    </script>
+  </body>
+</html>

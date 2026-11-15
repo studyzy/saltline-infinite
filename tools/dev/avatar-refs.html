@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Saltline — Avatar References</title>
+    <link rel="stylesheet" href="./lab.css" />
+    <script>
+      if (location.protocol === "file:") {
+        document.documentElement.innerHTML =
+          '<body><div id="filewarn" style="display:block"><h2 style="font-size:16px;letter-spacing:.08em">Serve this page over HTTP</h2>' +
+          "<p>ES modules do not load from file://. From the repo root run</p>" +
+          "<p><code>python3 -m http.server 8733</code></p>" +
+          "<p>then open <code>http://localhost:8733/tools/dev/avatar-refs.html</code></p></div></body>";
+      }
+    </script>
+    <script type="importmap">
+      { "imports": { "three": "../../shared/three.js" } }
+    </script>
+    <style>
+      #ui {
+        width: 328px;
+      }
+      #refbar {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        bottom: 14px;
+        display: flex;
+        gap: 4px;
+        padding: 4px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        backdrop-filter: blur(8px);
+        user-select: none;
+      }
+      .ref {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        align-items: flex-start;
+        text-align: left;
+        padding: 6px 8px;
+        line-height: 1.35;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.03);
+        overflow: hidden;
+      }
+      .ref .key {
+        color: var(--accent);
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+      .ref .name {
+        color: var(--ink);
+        font-size: 10.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .ref .meta {
+        color: var(--dim);
+        font-size: 9px;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .ref.on {
+        border-color: var(--accent);
+        background: rgba(42, 212, 176, 0.1);
+      }
+      .ref.warn .meta {
+        color: #e08a6a;
+      }
+      #clipRow {
+        display: flex;
+        gap: 4px;
+      }
+      #clipRow select {
+        flex: 1;
+        min-width: 0;
+        appearance: none;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--ink);
+        font: inherit;
+        font-size: 11px;
+        padding: 4px 6px;
+        border-radius: 4px;
+      }
+      #details {
+        margin-top: 9px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 10px;
+        line-height: 1.55;
+      }
+      #details b {
+        color: var(--ink);
+        font-weight: 500;
+      }
+      #details a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      #details .note {
+        color: var(--dim);
+        font-style: italic;
+      }
+      #stats {
+        top: 52px;
+      }
+      #labnav {
+        left: auto;
+        right: 16px;
+        bottom: auto;
+        top: 16px;
+      }
+      #hint {
+        bottom: 82px;
+      }
+      #loading {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        color: var(--dim);
+        letter-spacing: 0.1em;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="loading">LOADING REFERENCES…</div>
+
+    <div id="ui">
+      <h1>SALTLINE <b>// AVATAR REFS</b></h1>
+      <div class="sub">open-source shooter operators · pick one to rebuild against</div>
+
+      <div class="group">
+        <label>View</label>
+        <div class="row" id="modes">
+          <button data-mode="lineup" class="on">Lineup</button>
+          <button data-mode="inspect">Inspect</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Animation</label>
+        <div id="clipRow">
+          <select id="clip"></select>
+          <button id="play" class="on">Play</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>View options</label>
+        <div class="row">
+          <button id="turntable">Turntable</button>
+          <button id="wire">Wireframe</button>
+          <button id="gridBtn" class="on">Grid</button>
+          <button id="night">Night light</button>
+        </div>
+      </div>
+
+      <div id="details"></div>
+    </div>
+
+    <div id="stats"></div>
+    <div id="hint">drag to orbit · wheel to zoom · 1–6 select · L lineup · T turntable · W wire · Space play</div>
+    <div id="refbar"></div>
+
+    <nav id="labnav">
+      <a href="./avatar-preview.html">Avatar</a>
+      <a href="./avatar-refs.html" class="on">Refs</a>
+      <a href="./drone-preview.html">Drone</a>
+      <a href="./hound-preview.html">Hound</a>
+      <a href="./weapon-preview.html">Weapon</a>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "../../shared/three.js";
+      import { GLTFLoader } from "./vendor/GLTFLoader.js";
+      import {
+        bindKeys,
+        collectMaterials,
+        createViewer,
+        setWireframe,
+        triangleCount,
+      } from "./lab.js";
+
+      // Freely licensed, downloadable models used only as shape/material
+      // references for the procedural cooperative operator. `yaw` turns each
+      // model to face +Z (the default camera); `hide` drops broken extra
+      // meshes that came with the export.
+      const REFS = [
+        {
+          key: "A",
+          file: "assets/refs/soldier_tac.glb",
+          name: "Tactical Operator",
+          author: "1799danly",
+          license: "CC BY 4.0",
+          source: "https://sketchfab.com/3d-models/850593a8c7114c188395ba1849a66eb9",
+          note: "semi-realistic · plate carrier, helmet, balaclava, shoulder pads · posed, no clips",
+          yaw: 0,
+          hide: ["0"],
+          hideMaterials: ["HeadphonesT"],
+        },
+        {
+          key: "B",
+          file: "assets/refs/swat-modular.glb",
+          name: "SWAT (modular)",
+          author: "Quaternius",
+          license: "CC0",
+          source: "https://quaternius.com/packs/ultimatemodularcharacters.html",
+          note: "stylized low-poly · untextured, recolored in code · 24 clips",
+          yaw: 0,
+        },
+        {
+          key: "C",
+          file: "assets/refs/soldier_mixamo.glb",
+          name: "Armored Grunt",
+          author: "Mixamo (three.js example)",
+          license: "Mixamo royalty-free",
+          source: "https://github.com/mrdoob/three.js/tree/dev/examples/models/gltf",
+          note: "mid-poly sci-fi grunt · helmet + visor + chest rig · 4 clips",
+          yaw: Math.PI,
+          height: 1.75,
+        },
+        {
+          key: "D",
+          file: "assets/refs/poly_military_man.glb",
+          name: "Military Man",
+          author: "madtrollstudio",
+          license: "CC BY 4.0",
+          source: "https://poly.pizza/m/3AiqeNLKkP",
+          note: "modern low-poly · helmet, vest, knee pads, headset · T-pose, no clips",
+          yaw: 0,
+        },
+        {
+          key: "E",
+          file: "assets/refs/poly_commando.glb",
+          name: "Commando",
+          author: "Umair Yaqub",
+          license: "CC BY 4.0",
+          source: "https://poly.pizza/m/dwSTUGtcaN",
+          note: "lean commando silhouette · helmet + chest rig · no clips",
+          yaw: -Math.PI / 2,
+        },
+        {
+          key: "F",
+          file: "assets/refs/poly_soldier_scifi.glb",
+          name: "Heavy Trooper",
+          author: "Manaos",
+          license: "CC BY 4.0",
+          source: "https://poly.pizza/m/tGGCGep9kS",
+          note: "sci-fi heavy armor · angular plating · no clips",
+          yaw: 0,
+        },
+      ];
+
+      const SPACING = 1.15;
+      const TARGET_HEIGHT = 1.78;
+
+      const canvas = document.getElementById("view");
+      const viewer = createViewer(canvas, {
+        fov: 38,
+        target: [0, 0.95, 0],
+        az: 0,
+        el: 0.1,
+        dist: 8.2,
+        minDist: 0.3,
+        maxDist: 40,
+        groundSize: 120,
+        gridSize: 60,
+        gridDivisions: 60,
+        fog: [24, 70],
+      });
+      window.__viewer = viewer;
+
+      const loader = new GLTFLoader();
+      const refsEntry = new Array(REFS.length).fill(null);
+      let loadedCount = 0;
+      let mode = "lineup";
+      let selected = 0;
+      let wire = false;
+      let playing = true;
+
+      const refbar = document.getElementById("refbar");
+      const clipSelect = document.getElementById("clip");
+      const detailsEl = document.getElementById("details");
+      const statsEl = document.getElementById("stats");
+      const loadingEl = document.getElementById("loading");
+
+      // ---- load -----------------------------------------------------------
+      function loadRef(ref, index) {
+        return new Promise((resolve) => {
+          const group = new THREE.Group();
+          group.name = `ref-${ref.key}`;
+          loader.load(
+            ref.file,
+            (gltf) => {
+              const model = gltf.scene;
+              const skip = new Set(ref.hide || []);
+              const skipMaterials = new Set(ref.hideMaterials || []);
+              model.traverse((node) => {
+                if (!node.isMesh) return;
+                const materialNames = (Array.isArray(node.material) ? node.material : [node.material])
+                  .map((material) => material?.name);
+                if (skip.has(node.name) || materialNames.some((name) => skipMaterials.has(name))) {
+                  node.visible = false;
+                  return;
+                }
+                node.castShadow = true;
+                node.receiveShadow = true;
+                if (node.isSkinnedMesh) node.frustumCulled = false;
+              });
+
+              // Normalize to a common height and stand on the ground so the
+              // lineup compares silhouettes rather than arbitrary units.
+              const box = new THREE.Box3().setFromObject(model);
+              const size = box.getSize(new THREE.Vector3());
+              const height = ref.height || TARGET_HEIGHT;
+              if (size.y > 0.001) model.scale.multiplyScalar(height / size.y);
+              model.updateMatrixWorld(true);
+              const scaled = new THREE.Box3().setFromObject(model);
+              const center = scaled.getCenter(new THREE.Vector3());
+              model.position.x -= center.x;
+              model.position.z -= center.z;
+              model.position.y -= scaled.min.y;
+              if (ref.yaw) model.rotation.y = ref.yaw;
+
+              group.add(model);
+              viewer.scene.add(group);
+
+              const materials = collectMaterials(model);
+              const mixer = gltf.animations.length ? new THREE.AnimationMixer(model) : null;
+              const entry = {
+                ref,
+                index,
+                height,
+                group,
+                model,
+                materials,
+                mixer,
+                clips: gltf.animations,
+                tris: triangleCount(model),
+                bones: countBones(model),
+                textures: countTextures(materials),
+                action: null,
+                failed: false,
+              };
+              refsEntry[index] = entry;
+              playDefaultClip(entry);
+              placeAll();
+              finishOne();
+              resolve(entry);
+            },
+            undefined,
+            (error) => {
+              console.error("failed to load", ref.file, error);
+              refsEntry[index] = { ref, index, group, failed: true, materials: [], clips: [], textures: { count: 0, mb: 0 }, bones: 0, tris: 0 };
+              updateCard(index);
+              finishOne();
+              resolve(null);
+            },
+          );
+        });
+      }
+
+      function finishOne() {
+        loadedCount++;
+        if (loadedCount === REFS.length) {
+          loadingEl.remove();
+          window.__refs = refsEntry.filter(Boolean);
+          placeAll();
+          fitLineup();
+          select(selected, { keepMode: true });
+        } else {
+          loadingEl.textContent = `LOADING REFERENCES… ${loadedCount}/${REFS.length}`;
+        }
+      }
+
+      function countBones(model) {
+        let bones = 0;
+        model.traverse((node) => {
+          if (node.isBone) bones++;
+        });
+        return bones;
+      }
+
+      function countTextures(materials) {
+        const seen = new Set();
+        let bytes = 0;
+        for (const material of materials) {
+          for (const texture of [
+            material.map,
+            material.normalMap,
+            material.roughnessMap,
+            material.metalnessMap,
+            material.emissiveMap,
+            material.aoMap,
+          ]) {
+            if (!texture || seen.has(texture.uuid)) continue;
+            seen.add(texture.uuid);
+            const width = texture.image?.width || 0;
+            const height = texture.image?.height || 0;
+            bytes += width * height * 4 * (4 / 3);
+          }
+        }
+        return { count: seen.size, mb: bytes / 1048576 };
+      }
+
+      function playDefaultClip(entry) {
+        if (!entry.mixer || !entry.clips.length) return;
+        const clip =
+          entry.clips.find((item) => /^idle$/i.test(item.name)) ||
+          entry.clips.find((item) => /idle/i.test(item.name)) ||
+          entry.clips[0];
+        entry.action = entry.mixer.clipAction(clip);
+        entry.action.reset().play();
+        entry.action.paused = !playing;
+      }
+
+      // ---- layout ---------------------------------------------------------
+      function placeAll() {
+        const visible = refsEntry.filter((entry) => entry && !entry.failed);
+        const count = visible.length;
+        visible.forEach((entry, slot) => {
+          entry.group.visible = mode === "lineup" || entry.index === selected;
+          entry.group.position.x = mode === "lineup" ? (slot - (count - 1) / 2) * SPACING : 0;
+        });
+        updateTags();
+      }
+
+      function fitLineup() {
+        const count = refsEntry.filter((entry) => entry && !entry.failed).length;
+        const width = Math.max(1.6, (count - 1) * SPACING + 1.3);
+        const fov = THREE.MathUtils.degToRad(viewer.camera.fov);
+        const hFov = 2 * Math.atan(Math.tan(fov / 2) * viewer.camera.aspect);
+        const tanHalf = Math.tan(hFov / 2);
+        // Fit inside the area the control panel leaves free, then slide the
+        // camera target so the lineup sits in the middle of that area.
+        const panel = document.getElementById("ui").getBoundingClientRect();
+        const freeLeft = Math.min(panel.right + 20, window.innerWidth * 0.5);
+        const freeFraction = (window.innerWidth - freeLeft) / window.innerWidth;
+        viewer.orbit.dist = Math.max(3.2, width / (2 * tanHalf * freeFraction * 0.95));
+        const visibleWidth = 2 * viewer.orbit.dist * tanHalf;
+        const freeCenter = (freeLeft + window.innerWidth) / 2;
+        viewer.orbit.target.set(
+          -((freeCenter - window.innerWidth / 2) / window.innerWidth) * visibleWidth,
+          0.95,
+          0,
+        );
+        viewer.orbit.el = 0.1;
+        viewer.orbit.az = 0;
+      }
+
+      const tags = [];
+      function updateTags() {
+        for (const tag of tags) tag.visible = false;
+        if (mode !== "lineup") return;
+        const visible = refsEntry.filter((entry) => entry && !entry.failed);
+        visible.forEach((entry, slot) => {
+          if (!tags[slot]) tags[slot] = makeTag();
+          const sprite = tags[slot];
+          sprite.visible = true;
+          sprite.position.set(entry.group.position.x, 2.0, 0);
+          drawTag(sprite, entry.ref);
+        });
+      }
+
+      function makeTag() {
+        const tagCanvas = document.createElement("canvas");
+        tagCanvas.width = 128;
+        tagCanvas.height = 128;
+        const texture = new THREE.CanvasTexture(tagCanvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        const material = new THREE.SpriteMaterial({
+          map: texture,
+          transparent: true,
+          depthWrite: false,
+          toneMapped: false,
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(0.33, 0.33, 1);
+        viewer.scene.add(sprite);
+        return sprite;
+      }
+
+      function drawTag(sprite, ref) {
+        const tagCanvas = sprite.material.map.image;
+        const ctx = tagCanvas.getContext("2d");
+        ctx.clearRect(0, 0, tagCanvas.width, tagCanvas.height);
+        ctx.fillStyle = "rgba(8,14,17,0.82)";
+        ctx.beginPath();
+        ctx.roundRect(8, 8, 112, 112, 18);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(42,212,176,0.65)";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = "#2ad4b0";
+        ctx.font = "700 64px ui-monospace, Menlo, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(ref.key, 64, 68);
+        sprite.material.map.needsUpdate = true;
+      }
+
+      // ---- UI -------------------------------------------------------------
+      function buildCards() {
+        REFS.forEach((ref, index) => {
+          const card = document.createElement("button");
+          card.className = "ref";
+          card.dataset.index = String(index);
+          card.innerHTML =
+            `<span class="key">${ref.key}</span>` +
+            `<span class="name">${ref.name}</span>` +
+            `<span class="meta">${ref.author} · ${ref.license}</span>`;
+          card.addEventListener("click", () => select(index));
+          refbar.appendChild(card);
+        });
+      }
+
+      function updateCard(index) {
+        const entry = refsEntry[index];
+        const card = refbar.children[index];
+        if (!entry || !card) return;
+        card.classList.toggle("warn", entry.failed);
+        if (entry.failed) card.querySelector(".meta").textContent = "failed to load";
+      }
+
+      function select(index, options = {}) {
+        const entry = refsEntry[index];
+        if (!entry || entry.failed) return;
+        selected = index;
+        if (!options.keepMode) mode = "inspect";
+        syncModeButtons();
+        refbar.querySelectorAll(".ref").forEach((card) =>
+          card.classList.toggle("on", Number(card.dataset.index) === index),
+        );
+        placeAll();
+        if (mode === "inspect") {
+          viewer.orbit.target.set(0, entry.height * 0.52, 0);
+          viewer.orbit.dist = 3.45;
+          viewer.orbit.el = 0.08;
+          viewer.orbit.az = 0;
+        }
+        syncClips(entry);
+        renderDetails(entry);
+        renderStats(entry);
+      }
+
+      function syncModeButtons() {
+        document.querySelectorAll("#modes button").forEach((button) =>
+          button.classList.toggle("on", button.dataset.mode === mode),
+        );
+      }
+
+      function syncClips(entry) {
+        clipSelect.innerHTML = "";
+        if (!entry.clips.length) {
+          const option = document.createElement("option");
+          option.textContent = "no clips";
+          clipSelect.appendChild(option);
+          clipSelect.disabled = true;
+          return;
+        }
+        clipSelect.disabled = false;
+        entry.clips.forEach((clip, index) => {
+          const option = document.createElement("option");
+          option.value = String(index);
+          option.textContent = clip.name;
+          clipSelect.appendChild(option);
+        });
+        const current = entry.action?.getClip();
+        if (current) clipSelect.value = String(entry.clips.indexOf(current));
+      }
+
+      clipSelect.addEventListener("change", () => {
+        const entry = refsEntry[selected];
+        if (!entry || !entry.mixer) return;
+        const clip = entry.clips[Number(clipSelect.value)];
+        if (!clip) return;
+        entry.mixer.stopAllAction();
+        entry.action = entry.mixer.clipAction(clip);
+        entry.action.reset().play();
+        entry.action.paused = !playing;
+      });
+
+      const playButton = document.getElementById("play");
+      playButton.addEventListener("click", () => {
+        playing = !playing;
+        playButton.classList.toggle("on", playing);
+        playButton.textContent = playing ? "Play" : "Paused";
+        for (const entry of refsEntry) {
+          if (entry?.action) entry.action.paused = !playing;
+        }
+      });
+
+      document.querySelectorAll("#modes button").forEach((button) =>
+        button.addEventListener("click", () => {
+          mode = button.dataset.mode;
+          syncModeButtons();
+          placeAll();
+          const entry = refsEntry[selected];
+          if (mode === "lineup") {
+            fitLineup();
+          } else if (entry) {
+            viewer.orbit.target.set(0, entry.height * 0.52, 0);
+            viewer.orbit.dist = 3.45;
+            viewer.orbit.el = 0.08;
+            viewer.orbit.az = 0;
+          }
+          if (entry) {
+            syncClips(entry);
+            renderDetails(entry);
+            renderStats(entry);
+          }
+        }),
+      );
+
+      const turntableButton = document.getElementById("turntable");
+      turntableButton.addEventListener("click", () => {
+        viewer.turntable = !viewer.turntable;
+        turntableButton.classList.toggle("on", viewer.turntable);
+      });
+
+      const wireButton = document.getElementById("wire");
+      wireButton.addEventListener("click", () => {
+        wire = !wire;
+        wireButton.classList.toggle("on", wire);
+        for (const entry of refsEntry) {
+          if (entry && !entry.failed) setWireframe(entry.materials, wire);
+        }
+      });
+
+      const gridButton = document.getElementById("gridBtn");
+      gridButton.addEventListener("click", () => {
+        viewer.setGrid(!viewer.grid.visible);
+        gridButton.classList.toggle("on", viewer.grid.visible);
+      });
+
+      const nightButton = document.getElementById("night");
+      let night = false;
+      nightButton.addEventListener("click", () => {
+        night = !night;
+        viewer.setNight(night);
+        nightButton.classList.toggle("on", night);
+      });
+
+      function renderDetails(entry) {
+        const ref = entry.ref;
+        detailsEl.innerHTML =
+          `<b>${ref.name}</b> · ${ref.author}<br>` +
+          `License: <b>${ref.license}</b><br>` +
+          `<span class="note">${ref.note}</span><br>` +
+          `<a href="${ref.source}" target="_blank" rel="noreferrer">source ↗</a>`;
+      }
+
+      function renderStats(entry) {
+        statsEl.innerHTML =
+          `<b>${entry.tris.toLocaleString()}</b> tris · <b>${entry.bones}</b> bones<br>` +
+          `<b>${entry.materials.length}</b> materials · <b>${entry.textures.count}</b> tex ` +
+          `(<b>${entry.textures.mb.toFixed(1)}</b> MB)<br>` +
+          `<b>${entry.clips.length}</b> clips · ${entry.ref.license}`;
+      }
+
+      // ---- keys -----------------------------------------------------------
+      bindKeys({
+        1: () => select(0),
+        2: () => select(1),
+        3: () => select(2),
+        4: () => select(3),
+        5: () => select(4),
+        6: () => select(5),
+        l: () => document.querySelector('[data-mode="lineup"]').click(),
+        L: () => document.querySelector('[data-mode="lineup"]').click(),
+        t: () => turntableButton.click(),
+        T: () => turntableButton.click(),
+        w: () => wireButton.click(),
+        W: () => wireButton.click(),
+        " ": () => playButton.click(),
+      });
+
+      // ---- boot -----------------------------------------------------------
+      buildCards();
+      Promise.all(REFS.map(loadRef)).then(() => {
+        window.__refs = refsEntry.filter(Boolean);
+      });
+
+      viewer.start((dt) => {
+        for (const entry of refsEntry) {
+          if (entry?.mixer) entry.mixer.update(dt);
+        }
+        if (mode === "inspect") {
+          const entry = refsEntry[selected];
+          if (entry) {
+            viewer.orbit.target.y = entry.height * 0.52;
+            viewer.orbit.target.x = 0;
+            viewer.orbit.target.z = 0;
+            entry.group.position.x = 0;
+          }
+        }
+      });
+    </script>
+  </body>
+</html>

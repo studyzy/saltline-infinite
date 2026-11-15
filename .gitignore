@@ -1,3 +1,5 @@
 # Written at deploy time by tools/make-version.sh from the git commit.
 version.json
 node_modules/
+# Local-only third-party reference models for tools/dev/avatar-refs.html.
+tools/dev/assets/refs/

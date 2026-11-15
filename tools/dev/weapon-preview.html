@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Saltline — PAC-9 Lab</title>
+    <link rel="stylesheet" href="./lab.css" />
+    <script>
+      if (location.protocol === "file:") {
+        document.documentElement.innerHTML =
+          '<body><div id="filewarn" style="display:block"><h2 style="font-size:16px;letter-spacing:.08em">Serve this page over HTTP</h2>' +
+          "<p>ES modules do not load from file://. From the repo root run</p>" +
+          "<p><code>python3 -m http.server 8733</code></p>" +
+          "<p>then open <code>http://localhost:8733/tools/dev/weapon-preview.html</code></p></div></body>";
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="ui">
+      <h1>SALTLINE <b>// PAC-9 LAB</b></h1>
+      <div class="sub">PAC-9 “Longshore” · viewmodel rig</div>
+
+      <div class="group">
+        <label>Action</label>
+        <div class="row" id="modes">
+          <button data-mode="idle" class="on">Idle</button>
+          <button data-mode="ads">ADS</button>
+          <button data-mode="fire">Fire</button>
+          <button data-mode="reload">Reload</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Time scale</label>
+        <div class="slider">
+          <input id="speed" type="range" min="0" max="1.5" step="0.05" value="1" />
+          <output id="speedOut">1.00×</output>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Camera</label>
+        <div class="row" id="cams">
+          <button data-cam="three" class="on">3/4</button>
+          <button data-cam="side">Side</button>
+          <button data-cam="top">Top</button>
+          <button data-cam="rear">Rear</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Inspect</label>
+        <div class="row" id="closeups">
+          <button data-close="muzzle">Muzzle</button>
+          <button data-close="optic">Optic</button>
+          <button data-close="mag">Magazine</button>
+          <button data-close="grip">Grip</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>View</label>
+        <div class="row">
+          <button id="turntable">Turntable</button>
+          <button id="wire">Wireframe</button>
+          <button id="gridBtn" class="on">Grid</button>
+          <button id="night">Night light</button>
+          <button id="handsBtn" class="on">Gloves</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stats"></div>
+    <div id="hint">drag to orbit · wheel to zoom · space to pause</div>
+    <nav id="labnav">
+      <a href="./avatar-preview.html">Avatar</a>
+      <a href="./avatar-refs.html">Refs</a>
+      <a href="./drone-preview.html">Drone</a>
+      <a href="./hound-preview.html">Hound</a>
+      <a href="./weapon-preview.html" class="on">Weapon</a>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "../../shared/three.js";
+      import { createWeapon, PAC9_SPEC } from "../../js/weapon.js";
+      import {
+        bindKeys,
+        collectMaterials,
+        createViewer,
+        setWireframe,
+      } from "./lab.js";
+
+      const canvas = document.getElementById("view");
+      const viewer = createViewer(canvas, {
+        fov: 32,
+        target: [0, -0.02, -0.08],
+        az: Math.PI * 0.74,
+        el: 0.22,
+        dist: 1.45,
+        minDist: 0.4,
+        maxDist: 3.5,
+        groundSize: 40,
+        gridSize: 32,
+        gridDivisions: 64,
+        groundY: -0.75,
+        fog: [6, 26],
+        enableLayers: [1],
+      });
+
+      // ---- weapon ---------------------------------------------------------
+      const noop = () => {};
+      const stubMaterial = (color, roughness, metalness, name) => {
+        const m = new THREE.MeshStandardMaterial({
+          color,
+          roughness,
+          metalness,
+          vertexColors: true,
+        });
+        m.name = name;
+        return m;
+      };
+
+      const ctx = {
+        scene: viewer.scene,
+        camera: viewer.camera,
+        viewCamera: viewer.camera,
+        mats: {
+          get(name) {
+            if (name === "brass") return stubMaterial(0xc9a227, 0.35, 1, "preview_brass");
+            // The glove geometry bakes bright multipliers; keep the fabric dark.
+            if (name === "glove_fabric")
+              return stubMaterial(0x23262a, 0.95, 0, "preview_glove");
+            return stubMaterial(0x777d81, 0.5, 0.7, "preview_default");
+          },
+        },
+        input: {
+          ads: false,
+          fire: false,
+          pressed: () => false,
+          look: null,
+          move: null,
+        },
+        player: {
+          alive: true,
+          pos: new THREE.Vector3(),
+          eye: new THREE.Vector3(),
+          vel: new THREE.Vector3(),
+          speed: 0,
+          onGround: true,
+          sprinting: false,
+          crouching: false,
+          addRecoil: noop,
+          addShake: noop,
+        },
+        events: { emit: noop },
+        combat: { playerShot: () => null },
+        fx: null,
+        render: null,
+        rng: Math.random,
+      };
+
+      const weapon = await createWeapon(ctx);
+
+      // The viewmodel is authored at hip position/rotation; compensate that pose
+      // so the receiver sits at the orbit target instead of floating a third of
+      // a metre off-axis. Weapon.js hip pose: eu.p / eu.r, ADS pose: qv.p.
+      const HIP_P = new THREE.Vector3(0.118, -0.122, -0.275);
+      const HIP_R = new THREE.Euler(0.034, 0.085, -0.03, "YXZ");
+      const hipQ = new THREE.Quaternion().setFromEuler(HIP_R);
+      const ADS_P = new THREE.Vector3(0, -PAC9_SPEC.sightY, -0.135);
+      const IDENTITY_Q = new THREE.Quaternion();
+      const holder = new THREE.Group();
+      holder.add(weapon.root);
+      viewer.scene.add(holder);
+
+      const baseP = new THREE.Vector3();
+      const baseQ = new THREE.Quaternion();
+      function placeHolder() {
+        // Blend the compensation with the ADS pose so the sight comes up to the
+        // centre instead of the whole rifle drifting out of frame.
+        const k = weapon.ads;
+        baseP.copy(HIP_P).lerp(ADS_P, k);
+        baseQ.copy(hipQ).slerp(IDENTITY_Q, k);
+        holder.quaternion.copy(baseQ).invert();
+        holder.position.copy(baseP).applyQuaternion(holder.quaternion).negate();
+      }
+
+      // Lift the near-black anodised / phosphate / polymer albedo so the parts
+// separate under the studio lights (the game relies on its textures). The
+// glove material is excluded: its baked vertex colours are already bright.
+      const materialSet = new Set();
+      weapon.root.traverse((node) => {
+        if (!node.isMesh) return;
+        for (const m of Array.isArray(node.material) ? node.material : [node.material]) {
+          if (!m || materialSet.has(m)) continue;
+          materialSet.add(m);
+          if (m.isMeshStandardMaterial) {
+            if (m.name && m.name.startsWith("pac9_")) {
+              const max = Math.max(m.color.r, m.color.g, m.color.b);
+              if (max < 0.06) m.color.multiplyScalar(7);
+            }
+            m.envMapIntensity = 1.2;
+          }
+        }
+      });
+
+      const handMeshes = [];
+      weapon.root.traverse((node) => {
+        if (!node.isMesh) return;
+        const mats = Array.isArray(node.material) ? node.material : [node.material];
+        if (mats.some((m) => m && m.name === "preview_glove")) handMeshes.push(node);
+      });
+
+      // ---- action state ---------------------------------------------------
+      const RELOAD_VIEW = { target: new THREE.Vector3(0, 0.05, -0.12), dist: 1.9 };
+      const savedView = { target: new THREE.Vector3(0, -0.02, -0.14), dist: 1.35 };
+      let viewBlend = 0;
+      let viewGoal = 0;
+      let viewSaved = false;
+
+      let mode = "idle";
+      let fireT = 0;
+
+      function setMode(name) {
+        if (name === "fire") {
+          mode = "fire";
+          fireT = 0.5;
+          ctx.input.fire = true;
+          ctx.input.ads = false;
+        } else if (name === "reload") {
+          if (weapon.state === "reloading") return;
+          if (weapon.ammo > weapon.magSize - 4) weapon.ammo = 0;
+          weapon.reloadNow();
+          mode = "reload";
+          ctx.input.fire = false;
+          ctx.input.ads = false;
+          if (!viewSaved) {
+            savedView.target.copy(viewer.orbit.target);
+            savedView.dist = viewer.orbit.dist;
+            viewSaved = true;
+          }
+          viewGoal = 1;
+        } else {
+          mode = name;
+          ctx.input.ads = name === "ads";
+          ctx.input.fire = false;
+          viewGoal = 0;
+        }
+        for (const b of document.querySelectorAll("#modes button"))
+          b.classList.toggle("on", b.dataset.mode === mode);
+      }
+
+      for (const b of document.querySelectorAll("#modes button"))
+        b.addEventListener("click", () => setMode(b.dataset.mode));
+
+      // ---- camera presets -------------------------------------------------
+      const PRESETS = {
+        three: { az: Math.PI * 0.74, el: 0.22, dist: 1.45, target: [0, -0.02, -0.08] },
+        side: { az: Math.PI * 0.5, el: 0.12, dist: 1.8, target: [0, -0.02, 0.02] },
+        top: { az: Math.PI * 0.5, el: 0.92, dist: 1.8, target: [0, -0.02, 0.0] },
+        rear: { az: Math.PI * 0.12, el: 0.18, dist: 1.3, target: [0, -0.02, 0.02] },
+      };
+      const CLOSEUPS = {
+        muzzle: { az: Math.PI * 0.9, el: 0.1, dist: 0.52, target: [0, -0.01, -0.45] },
+        optic: { az: Math.PI * 0.82, el: 0.28, dist: 0.42, target: [0, 0.06, 0.0] },
+        mag: { az: Math.PI * 0.62, el: -0.05, dist: 0.72, target: [0, -0.11, -0.05] },
+        grip: { az: Math.PI * 0.38, el: 0.12, dist: 0.62, target: [0, -0.08, 0.05] },
+      };
+
+      function applyCamera(preset) {
+        viewer.orbit.az = preset.az;
+        viewer.orbit.el = preset.el;
+        viewer.orbit.dist = preset.dist;
+        viewer.orbit.target.set(...preset.target);
+        // An explicit camera choice wins over the reload framing.
+        viewBlend = 0;
+        viewGoal = 0;
+        viewSaved = false;
+      }
+
+      for (const b of document.querySelectorAll("#cams button"))
+        b.addEventListener("click", () => {
+          applyCamera(PRESETS[b.dataset.cam]);
+          for (const o of document.querySelectorAll("#cams button")) o.classList.toggle("on", o === b);
+          for (const o of document.querySelectorAll("#closeups button")) o.classList.remove("on");
+        });
+
+      for (const b of document.querySelectorAll("#closeups button"))
+        b.addEventListener("click", () => {
+          applyCamera(CLOSEUPS[b.dataset.close]);
+          for (const o of document.querySelectorAll("#closeups button")) o.classList.toggle("on", o === b);
+          for (const o of document.querySelectorAll("#cams button")) o.classList.remove("on");
+        });
+
+      // ---- view toggles ---------------------------------------------------
+      const turntableBtn = document.getElementById("turntable");
+      turntableBtn.addEventListener("click", () => {
+        viewer.turntable = !viewer.turntable;
+        turntableBtn.classList.toggle("on", viewer.turntable);
+      });
+
+      const wireMaterials = collectMaterials(weapon.root);
+      const wireBtn = document.getElementById("wire");
+      let wire = false;
+      wireBtn.addEventListener("click", () => {
+        wire = !wire;
+        wireBtn.classList.toggle("on", wire);
+        setWireframe(wireMaterials, wire);
+      });
+
+      const gridBtn = document.getElementById("gridBtn");
+      gridBtn.addEventListener("click", () => {
+        viewer.setGrid(!viewer.grid.visible);
+        gridBtn.classList.toggle("on", viewer.grid.visible);
+      });
+
+      const nightBtn = document.getElementById("night");
+      let nightOn = false;
+      nightBtn.addEventListener("click", () => {
+        nightOn = !nightOn;
+        nightBtn.classList.toggle("on", nightOn);
+        viewer.setNight(nightOn);
+      });
+
+      const handsBtn = document.getElementById("handsBtn");
+      let handsOn = true;
+      handsBtn.addEventListener("click", () => {
+        handsOn = !handsOn;
+        handsBtn.classList.toggle("on", handsOn);
+        for (const mesh of handMeshes) mesh.visible = handsOn;
+      });
+
+      // ---- time scale -----------------------------------------------------
+      const speedInput = document.getElementById("speed");
+      const speedOut = document.getElementById("speedOut");
+      let timeScale = 1;
+      speedInput.addEventListener("input", () => {
+        timeScale = parseFloat(speedInput.value);
+        speedOut.textContent = timeScale.toFixed(2) + "×";
+      });
+
+      let paused = false;
+      const hint = document.getElementById("hint");
+      const HINT = "drag to orbit · wheel to zoom · space to pause";
+      bindKeys({
+        " ": () => {
+          paused = !paused;
+          hint.textContent = paused ? "paused — space to resume" : HINT;
+        },
+        1: () => setMode("idle"),
+        2: () => setMode("ads"),
+        3: () => setMode("fire"),
+        4: () => setMode("reload"),
+      });
+
+      // ---- stats ----------------------------------------------------------
+      const statsEl = document.getElementById("stats");
+      let statsCache = "";
+      function updateStats() {
+        const next =
+          `${weapon.info.tris.toLocaleString()}|${weapon.info.meshes}|` +
+          `${materialSet.size}|${weapon.ammo}|${weapon.reserve}|${weapon.state}`;
+        if (next === statsCache) return;
+        statsCache = next;
+        statsEl.innerHTML =
+          `<b>${weapon.info.tris.toLocaleString()}</b> tris<br>` +
+          `<b>${weapon.info.meshes}</b> meshes<br>` +
+          `<b>${materialSet.size}</b> materials<br>` +
+          `<b>${weapon.ammo} / ${weapon.reserve}</b> rounds<br>` +
+          `<b>${weapon.state}</b> · ${PAC9_SPEC.name}`;
+      }
+
+      // ---- loop -----------------------------------------------------------
+      weapon.update(1 / 60);
+      placeHolder();
+      updateStats();
+
+      viewer.start((dt) => {
+        if (paused || timeScale <= 0) return;
+        const step = dt * timeScale;
+        weapon.update(step);
+        placeHolder();
+
+        // Reload swings the viewmodel out of the tight inspection framing;
+        // ease out to a wider shot for the duration, then back. If the reload
+        // is interrupted by another action, still restore the view.
+        if (viewSaved && weapon.state !== "reloading") viewGoal = 0;
+        if (viewSaved) {
+          viewBlend += (viewGoal - viewBlend) * (1 - Math.exp(-5 * step));
+          if (viewBlend > 0.002) {
+            viewer.orbit.target.lerpVectors(savedView.target, RELOAD_VIEW.target, viewBlend);
+            viewer.orbit.dist = savedView.dist + (RELOAD_VIEW.dist - savedView.dist) * viewBlend;
+          }
+          if (viewGoal === 0 && viewBlend < 0.01) {
+            viewBlend = 0;
+            viewSaved = false;
+          }
+        }
+
+        if (mode === "fire") {
+          fireT -= step;
+          if (fireT <= 0) {
+            ctx.input.fire = false;
+            mode = "idle";
+            for (const b of document.querySelectorAll("#modes button"))
+              b.classList.toggle("on", b.dataset.mode === "idle");
+          }
+        } else if (mode === "reload" && weapon.state !== "reloading") {
+          mode = "idle";
+          viewGoal = 0;
+          for (const b of document.querySelectorAll("#modes button"))
+            b.classList.toggle("on", b.dataset.mode === "idle");
+        }
+        updateStats();
+      });
+    </script>
+  </body>
+</html>

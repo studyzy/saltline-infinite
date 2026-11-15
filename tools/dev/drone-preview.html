@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Saltline — Gull Lab</title>
+    <link rel="stylesheet" href="./lab.css" />
+    <script>
+      if (location.protocol === "file:") {
+        document.documentElement.innerHTML =
+          '<body><div id="filewarn" style="display:block"><h2 style="font-size:16px;letter-spacing:.08em">Serve this page over HTTP</h2>' +
+          "<p>ES modules do not load from file://. From the repo root run</p>" +
+          "<p><code>python3 -m http.server 8733</code></p>" +
+          "<p>then open <code>http://localhost:8733/tools/dev/drone-preview.html</code></p></div></body>";
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="ui">
+      <h1>SALTLINE <b>// GULL LAB</b></h1>
+      <div class="sub">attack drone · procedural rig</div>
+
+      <div class="group">
+        <label>Flight</label>
+        <div class="row" id="modes">
+          <button data-mode="hover" class="on">Hover</button>
+          <button data-mode="patrol">Patrol</button>
+          <button data-mode="attack">Attack</button>
+          <button data-mode="crash">Crash</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Time scale</label>
+        <div class="slider">
+          <input id="speed" type="range" min="0" max="1.5" step="0.05" value="1" />
+          <output id="speedOut">1.00×</output>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>Camera</label>
+        <div class="row" id="cams">
+          <button data-cam="front">Front</button>
+          <button data-cam="three" class="on">3/4</button>
+          <button data-cam="side">Side</button>
+          <button data-cam="top">Top</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label>View</label>
+        <div class="row">
+          <button id="turntable">Turntable</button>
+          <button id="wire">Wireframe</button>
+          <button id="gridBtn" class="on">Grid</button>
+          <button id="night">Night light</button>
+          <button id="beam" class="on">Beam</button>
+          <button id="discs" class="on">Rotor discs</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stats"></div>
+    <div id="hint">drag to orbit · wheel to zoom · space to pause</div>
+    <nav id="labnav">
+      <a href="./avatar-preview.html">Avatar</a>
+      <a href="./avatar-refs.html">Refs</a>
+      <a href="./drone-preview.html" class="on">Drone</a>
+      <a href="./hound-preview.html">Hound</a>
+      <a href="./weapon-preview.html">Weapon</a>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "../../shared/three.js";
+      import { buildGullRig, createGull } from "../../js/drone.js";
+      import {
+        bindKeys,
+        collectMaterials,
+        createHost,
+        createViewer,
+        groundRaycast,
+        makeRigMaterials,
+        setWireframe,
+        triangleCount,
+      } from "./lab.js";
+
+      const canvas = document.getElementById("view");
+      const viewer = createViewer(canvas, {
+        fov: 38,
+        target: [0, 2, 0],
+        az: Math.PI * 0.22,
+        el: 0.2,
+        dist: 2.9,
+        minDist: 0.35,
+        maxDist: 24,
+        groundSize: 400,
+        gridSize: 120,
+        gridDivisions: 60,
+        gridFollow: true,
+        fog: [26, 110],
+      });
+
+      // ---- model ----------------------------------------------------------
+      const materials = makeRigMaterials();
+      const host = createHost({
+        scene: viewer.scene,
+        camera: viewer.camera,
+        raycast: (origin, dir, maxDist) => groundRaycast(origin, dir, maxDist),
+      });
+
+      let mode = "hover";
+      let retired = false;
+      let respawnTimer = 0;
+
+      const dummy = {
+        pos: new THREE.Vector3(0, 0, 0),
+        vel: new THREE.Vector3(),
+        eye: new THREE.Vector3(0, 1.1, 0),
+        alive: true,
+        speed: 0,
+        damage() {},
+      };
+
+      const ai = {
+        G: host,
+        rng: Math.random,
+        t: 0,
+        list: [],
+        playerSpeed: 0,
+        think(gull) {
+          if (mode === "attack") {
+            gull.mode = "engage";
+            gull.los = true;
+            gull.noSeeT = 0;
+            gull.seeT = 1;
+            gull.orbitR = 2.6;
+            gull.alt = 1.7;
+            gull.flipT = 999;
+          } else {
+            gull.mode = "patrol";
+            gull.los = false;
+          }
+        },
+        requestToken: () => true,
+        releaseToken() {},
+        provoke() {},
+        fireBolt() {},
+        retire() {
+          retired = true;
+        },
+      };
+
+      const rigDef = buildGullRig();
+      const gull = createGull(ai, rigDef, materials, 0);
+      viewer.scene.add(gull.rig.group);
+
+      // ---- attack marker --------------------------------------------------
+      const marker = new THREE.Group();
+      const orb = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.075, 0),
+        new THREE.MeshBasicMaterial({ color: 0xff5a33, toneMapped: false }),
+      );
+      orb.position.y = 1.1;
+      const ringGeo = new THREE.RingGeometry(0.22, 0.26, 32);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(
+        ringGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0xff5a33,
+          transparent: true,
+          opacity: 0.5,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      ring.position.y = 0.01;
+      const pin = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.006, 0.006, 1.1, 8, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xff5a33,
+          transparent: true,
+          opacity: 0.35,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      pin.position.y = 0.55;
+      marker.add(orb, ring, pin);
+      marker.visible = false;
+      viewer.scene.add(marker);
+
+      // ---- modes ----------------------------------------------------------
+      const MODE_DEFS = {
+        hover: {
+          pos: [0, 2, 0],
+          opts: { passive: true, hover: 2, patrolRadius: 0.2, yaw: Math.PI * 0.18 },
+          dist: 2.9,
+          targetY: 2,
+        },
+        patrol: {
+          pos: [0, 2, 0],
+          opts: { passive: true, hover: 2, patrolRadius: 3.4, yaw: 0 },
+          dist: 2.9,
+          targetY: 2,
+        },
+        attack: {
+          pos: [3, 1.8, 0],
+          opts: { passive: false, hover: 1.8, patrolRadius: 1 },
+          dist: 6.8,
+          targetY: 1.35,
+        },
+      };
+
+      function applyMode(name) {
+        clearTimeout(respawnTimer);
+        mode = name;
+        retired = false;
+        host.player = name === "attack" ? dummy : null;
+        marker.visible = name === "attack";
+
+        const def = MODE_DEFS[name];
+        gull._deactivate();
+        gull.isRemote = false;
+        gull._activate(new THREE.Vector3(...def.pos), def.opts);
+        if (name === "attack") {
+          gull.mode = "engage";
+          gull.orbitA = Math.PI * 0.5;
+          gull.orbitR = 2.6;
+          gull.alt = 1.7;
+          gull.cool = 0.5;
+          gull.flipT = 999;
+          gull.lastKnown.copy(dummy.pos);
+        }
+
+        viewer.orbit.target.set(0, def.targetY, 0);
+        viewer.orbit.dist = def.dist;
+        if (name === "attack") viewer.orbit.el = Math.max(viewer.orbit.el, 0.35);
+        for (const b of document.querySelectorAll("#modes button"))
+          b.classList.toggle("on", b.dataset.mode === name);
+      }
+
+      function startCrash() {
+        if (!gull.alive) return;
+        clearTimeout(respawnTimer);
+        mode = "crash";
+        host.player = null;
+        marker.visible = false;
+        gull.damage(1e6, gull.pos, new THREE.Vector3(0, -1, 0));
+        for (const b of document.querySelectorAll("#modes button"))
+          b.classList.toggle("on", b.dataset.mode === "crash");
+        respawnTimer = setTimeout(() => {
+          if (mode === "crash") applyMode("hover");
+        }, 3600);
+      }
+
+      for (const b of document.querySelectorAll("#modes button"))
+        b.addEventListener("click", () => {
+          if (b.dataset.mode === "crash") startCrash();
+          else applyMode(b.dataset.mode);
+        });
+
+      // ---- camera presets -------------------------------------------------
+      const PRESETS = {
+        front: { az: 0, el: 0.12 },
+        three: { az: Math.PI * 0.22, el: 0.2 },
+        side: { az: Math.PI * 0.5, el: 0.12 },
+        top: { az: Math.PI * 0.22, el: 1.05 },
+      };
+      for (const b of document.querySelectorAll("#cams button"))
+        b.addEventListener("click", () => {
+          const p = PRESETS[b.dataset.cam];
+          viewer.orbit.az = p.az;
+          viewer.orbit.el = p.el;
+          viewer.orbit.dist = mode === "attack" ? 6.8 : b.dataset.cam === "top" ? 3.4 : 2.9;
+          for (const o of document.querySelectorAll("#cams button"))
+            o.classList.toggle("on", o === b);
+        });
+
+      // ---- view toggles ---------------------------------------------------
+      const turntableBtn = document.getElementById("turntable");
+      turntableBtn.addEventListener("click", () => {
+        viewer.turntable = !viewer.turntable;
+        turntableBtn.classList.toggle("on", viewer.turntable);
+      });
+
+      const modelMaterials = collectMaterials(gull.rig.group);
+      const wireMaterials = modelMaterials.filter(
+        (m) => m !== materials.cone && m.name !== "label",
+      );
+      const wireBtn = document.getElementById("wire");
+      let wire = false;
+      wireBtn.addEventListener("click", () => {
+        wire = !wire;
+        wireBtn.classList.toggle("on", wire);
+        setWireframe(wireMaterials, wire);
+      });
+
+      const gridBtn = document.getElementById("gridBtn");
+      gridBtn.addEventListener("click", () => {
+        viewer.setGrid(!viewer.grid.visible);
+        gridBtn.classList.toggle("on", viewer.grid.visible);
+      });
+
+      const nightBtn = document.getElementById("night");
+      let nightOn = false;
+      nightBtn.addEventListener("click", () => {
+        nightOn = !nightOn;
+        nightBtn.classList.toggle("on", nightOn);
+        viewer.setNight(nightOn);
+      });
+
+      const beamBtn = document.getElementById("beam");
+      beamBtn.addEventListener("click", () => {
+        materials.cone.visible = !materials.cone.visible;
+        beamBtn.classList.toggle("on", materials.cone.visible);
+      });
+
+      const discsBtn = document.getElementById("discs");
+      discsBtn.addEventListener("click", () => {
+        materials.disc.visible = !materials.disc.visible;
+        discsBtn.classList.toggle("on", materials.disc.visible);
+      });
+
+      // ---- time scale -----------------------------------------------------
+      const speedInput = document.getElementById("speed");
+      const speedOut = document.getElementById("speedOut");
+      let timeScale = 1;
+      speedInput.addEventListener("input", () => {
+        timeScale = parseFloat(speedInput.value);
+        speedOut.textContent = timeScale.toFixed(2) + "×";
+      });
+
+      let paused = false;
+      const hint = document.getElementById("hint");
+      const HINT = "drag to orbit · wheel to zoom · space to pause";
+      bindKeys({
+        " ": () => {
+          paused = !paused;
+          hint.textContent = paused ? "paused — space to resume" : HINT;
+        },
+        1: () => applyMode("hover"),
+        2: () => applyMode("patrol"),
+        3: () => applyMode("attack"),
+        4: () => startCrash(),
+      });
+
+      // ---- stats ----------------------------------------------------------
+      document.getElementById("stats").innerHTML =
+        `<b>${triangleCount(gull.rig.group).toLocaleString()}</b> tris<br>` +
+        `<b>${gull.rig.skeleton.bones.length}</b> bones<br>` +
+        `<b>${modelMaterials.length}</b> materials<br>` +
+        `<b>${gull.rig.extraMesh ? "main + rotor/beam" : "main"}</b>`;
+
+      // ---- loop -----------------------------------------------------------
+      const follow = new THREE.Vector3();
+      applyMode("hover");
+
+      viewer.start((dt) => {
+        if (!paused && timeScale > 0) {
+          const step = dt * timeScale;
+          ai.t += step;
+          if (!retired) gull._update(step);
+        }
+
+        if (mode === "patrol" || mode === "crash") {
+          follow.set(gull.pos.x, Math.max(0.45, gull.pos.y + 0.05), gull.pos.z);
+          viewer.orbit.target.lerp(follow, 1 - Math.exp(-8 * dt));
+        } else if (mode === "attack" && gull.alive) {
+          // Keep both the drone and the target marker in frame as it circles.
+          follow.copy(dummy.pos).add(gull.pos).multiplyScalar(0.5);
+          follow.y = 1.35;
+          viewer.orbit.target.lerp(follow, 1 - Math.exp(-12 * dt));
+        }
+      });
+    </script>
+  </body>
+</html>

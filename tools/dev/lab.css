@@ -1,0 +1,200 @@
+/* Shared shell for the tools/dev model preview pages. */
+
+:root {
+  --ink: #d8e2e6;
+  --dim: #8496a0;
+  --line: rgba(133, 170, 182, 0.28);
+  --panel: rgba(9, 16, 20, 0.78);
+  --accent: #2ad4b0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #0b1115;
+  overflow: hidden;
+  color: var(--ink);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#ui {
+  position: fixed;
+  left: 16px;
+  top: 16px;
+  width: 328px;
+  padding: 14px 15px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  user-select: none;
+}
+
+#ui h1 {
+  margin: 0 0 2px;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+}
+
+#ui h1 b {
+  color: var(--accent);
+}
+
+#ui .sub {
+  color: var(--dim);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+
+.group {
+  margin-top: 10px;
+}
+
+.group > label {
+  display: block;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: rgba(42, 212, 176, 0.55);
+  color: #fff;
+}
+
+button.on {
+  border-color: var(--accent);
+  background: rgba(42, 212, 176, 0.14);
+  color: #fff;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slider output {
+  width: 34px;
+  text-align: right;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+#stats {
+  position: fixed;
+  right: 16px;
+  top: 16px;
+  padding: 9px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--dim);
+  font-size: 10.5px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+#stats b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+#hint {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  color: var(--dim);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  background: rgba(9, 16, 20, 0.5);
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+#labnav {
+  position: fixed;
+  left: 16px;
+  bottom: 14px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+}
+
+#labnav a {
+  color: var(--dim);
+  text-decoration: none;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+#labnav a:hover {
+  color: #fff;
+}
+
+#labnav a.on {
+  color: #fff;
+  background: rgba(42, 212, 176, 0.14);
+}
+
+#filewarn {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: #0b1115;
+  color: var(--ink);
+  padding: 15vh 10vw;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+#filewarn code {
+  color: var(--accent);
+}
