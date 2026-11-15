@@ -62,6 +62,30 @@ open `?room=ABCDE` directly). One player creates the room; the second joins it.
 - `node --test test/shared/*.test.js test/integration/*.test.js` runs the
   shared and headless integration tests.
 
+### Deploying it
+
+The live site is a static page plus a long-running authority, so a deploy has
+two halves that must land together:
+
+- the web root (`/var/www/shoot`) is synced from the repo and served by Caddy
+  at `/shoot/` — no `node_modules`, `test`, `tools`, `server` or `docs`;
+- `saltline.service` runs `node server/index.js` on `127.0.0.1:8091`, and Caddy
+  proxies the site-root path `/ws` to it (`client/net/connection.js` builds its
+  URL from `location.host`, so the socket is never under `/shoot/`).
+
+`~/bin/shoot-deploy.sh` does both: syntax-checks, installs `ws` if the lockfile
+moved, writes `version.json` from the commit, rsyncs the web root, restarts the
+service, and then checks it for real — every asset 200, the stamp on the page
+and in `version.json`, a plain `GET /ws` rejected, and `tools/probe-ws.mjs`
+completing a WebSocket handshake through the public URL and getting a `welcome`
+back from the room manager.
+
+```
+systemctl status saltline          # authority
+journalctl -u saltline -f          # room/match log
+node tools/probe-ws.mjs wss://<host>/ws
+```
+
 Files:
 
 - `shared/` — simulation, protocol, constants and the exported port colliders

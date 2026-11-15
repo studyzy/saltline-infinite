@@ -1,0 +1,21 @@
+# Saltline — 浏览器 FPS：静态站 + co-op 权威服务
+# 源 /home/ubuntu/saltline-infinite，静态发布 /var/www/shoot，线上 https://124.221.164.209/shoot/
+# 后端 systemd: saltline.service（node server/index.js，127.0.0.1:8091）
+redir /shoot /shoot/ 308
+
+# 客户端连的是 wss://<host>/ws（client/net/connection.js 用的是 location.host，
+# 路径固定 /ws），所以站点根上的 /ws 必须转给后端。Caddy 的 reverse_proxy
+# 自己处理 Upgrade，不需要额外指令。
+handle /ws {
+	reverse_proxy 127.0.0.1:8091
+}
+
+handle_path /shoot/* {
+	root * /var/www/shoot
+
+	# 游戏是单个 2.2MB 的 js/game.js，文件名不含 hash，一律回源校验
+	header Cache-Control "no-cache"
+	header Content-Security-Policy "frame-ancestors 'self'"
+
+	file_server
+}
