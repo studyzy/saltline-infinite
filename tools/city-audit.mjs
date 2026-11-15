@@ -1,13 +1,13 @@
 // City self-check. Run with: node tools/city-audit.mjs
 //
 // The city generator is a pure function of a block coordinate, so it can be
-// driven head-lessly: give createCity() a stub physics that records colliders
-// and a stub material cache, walk the player around, and assert the invariants
-// that make the blocks playable.
+// driven head-lessly: give createCity() the real physics and a stub material
+// cache, walk the player around, and assert the invariants that make the
+// blocks playable.
 //
-// It also pulls moveCapsule() out of the shipped js/game.js and uses THAT for
-// the collision tests, so a change to the real movement code cannot silently
-// invalidate the audit.
+// Collision uses the shipped createPhysics() from shared/physics.js — the same
+// code the client predicts with and the server simulates — so a change to the
+// real movement code cannot silently invalidate the audit.
 //
 // Invariants:
 //   1. every container a capsule can be dropped into pushes it back out
@@ -16,61 +16,29 @@
 //   4. a block's ground-level colliders are identical at both detail levels,
 //      so a block cannot change shape while the player is standing in it
 //   5. a walking player never ends up inside a collider
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// ---- load the city module as ESM (the repo has no package.json) -----------
-const tmp = mkdtempSync(join(tmpdir(), "saltline-audit-"));
-mkdirSync(join(tmp, "js", "vendor"), { recursive: true });
-for (const f of ["city.js", "vendor/three.module.js", "vendor/three.core.js"])
-  copyFileSync(join(ROOT, "js", f), join(tmp, "js", f));
-writeFileSync(join(tmp, "package.json"), '{"type":"module"}');
-
-const THREE = await import(join(tmp, "js", "vendor", "three.module.js"));
-const { createCity } = await import(join(tmp, "js", "city.js"));
-
-// ---- the real moveCapsule, lifted out of the game bundle ------------------
-const game = readFileSync(join(ROOT, "js", "game.js"), "utf8").split("\n");
-const from = game.findIndex((l) => l.trim().startsWith("moveCapsule(_, M, E, w = 0.32"));
-const to = game.findIndex((l, i) => i > from && l.trim().startsWith("nav: {"));
-if (from < 0 || to < 0) throw new Error("could not find moveCapsule in js/game.js");
-const body = game
-  .slice(from, to)
-  .join("\n")
-  .replace("moveCapsule(_, M, E", "function moveCapsule(_, M, E")
-  .trim()
-  .replace(/,$/, "");
-const makeMoveCapsule = new Function(
-  "THREE",
-  `const W = THREE.Vector3, u1 = 0.42, oi = { min: new W(-40,0,-30), max: new W(40,30,30), groundY: 0, seaY: -1.6, quayX: 30 }, Li = { x0: -1e9 }, i = {};
-   return function (e) { ${body} return moveCapsule; };`,
-)(THREE);
+// ---- load the modules -----------------------------------------------------
+// The repo is a package with "type": "module", so both halves import directly:
+// the city generator and the physics that actually runs in the game.
+const THREE = await import(join(ROOT, "js", "vendor", "three.module.js"));
+const { createCity } = await import(join(ROOT, "js", "city.js"));
+const { createPhysics } = await import(join(ROOT, "shared", "physics.js"));
 
 // ---- harness -------------------------------------------------------------
 function snapshot(px, pz) {
-  const boxes = [];
   const mats = new Map();
   const mat = (n) => {
     if (!mats.has(n)) mats.set(n, { name: n, isMaterial: true, clone() { return this; }, dispose() {} });
     return mats.get(n);
   };
-  const physics = {
-    boxes,
-    addBox(min, max, o = {}) {
-      const b = { min: new THREE.Vector3(...min), max: new THREE.Vector3(...max), surface: o.surface || "concrete", tag: o.tag || "" };
-      boxes.push(b);
-      return b;
-    },
-    removeBox(b) {
-      const i = boxes.indexOf(b);
-      if (i >= 0) boxes.splice(i, 1);
-    },
-    cityBlocked: () => false,
-  };
+  // The shipped physics: same collision code the client and the server use,
+  // with the city's colliders pushed into it exactly as in the game.
+  const physics = createPhysics({});
   const city = createCity({ scene: new THREE.Scene(), physics, mats: { get: mat, emissive: mat } });
   for (let i = 0; i < 4000; i++) {
     city.update(0.016, { x: px, y: 0, z: pz });
@@ -91,7 +59,7 @@ function snapshot(px, pz) {
       }
     }
   }
-  return { boxes, drawn, moveCapsule: makeMoveCapsule(boxes) };
+  return { boxes: physics.boxes, drawn, moveCapsule: physics.moveCapsule.bind(physics) };
 }
 
 const isContainer = (m) => /^paint_(red|blue|teal)$/.test(m);
@@ -237,7 +205,6 @@ for (let w = 0; w < 8; w++) {
 }
 note(inside === 0, `walking frames spent inside a solid: ${inside} of ${frames}`);
 
-rmSync(tmp, { recursive: true, force: true });
 if (fail.length) {
   console.log(`\n${fail.length} problem(s):`);
   for (const f of fail.slice(0, 20)) console.log("  - " + f);
