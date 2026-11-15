@@ -15,6 +15,7 @@
 import * as THREE from './vendor/three.module.js';
 
 const W = THREE.Vector3;
+import { t as tr } from './i18n.js';
 import { MATCH } from '../shared/constants.js';
 import { createInputState as pM } from './hud.js';
 
@@ -372,6 +373,9 @@ var sl = (i, e, t) => {
         o.setMarkers(P);
     }
     function U({ skipIntro: P = !1, quick: V = !1, keepRetries: Y = !1 } = {}) {
+      // A solo run is starting: drop the co-op flag even if the previous match
+      // ended without leaveMP(), otherwise the relay/wave director stays off.
+      c.mp = !1;
       if (
         (Y || (c.retries = 0),
         l.show("none"),

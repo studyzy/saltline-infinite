@@ -1664,6 +1664,9 @@ kbd {
   bottom: calc(28vh + var(--sab));
   padding-left: 16px;
   opacity: 0;
+  /* Purely informational overlay: never take clicks away from the menu
+     underneath it, even while it is fading in or out. */
+  pointer-events: none;
   transition: opacity 0.5s;
   text-shadow: var(--shadow);
   max-width: calc(100vw - var(--gl) - var(--gr) - 16px);

@@ -3973,41 +3973,4 @@ void main() {
       }
     );
   }
-  var h_ = {
-      KeyW: "forward",
-      KeyS: "back",
-      KeyA: "left",
-      KeyD: "right",
-      Space: "jump",
-      ShiftLeft: "sprint",
-      ShiftRight: "sprint",
-      KeyC: "crouch",
-      ControlLeft: "crouch",
-      ControlRight: "crouch",
-      KeyR: "reload",
-      KeyE: "interact",
-      KeyF: "melee",
-      KeyV: "melee",
-      KeyH: "heal",
-      Escape: "pause",
-      KeyP: "pause",
-      KeyQ: "alt",
-      Enter: "fire",
-      NumpadEnter: "fire",
-      ArrowLeft: "turnL",
-      ArrowRight: "turnR",
-      ArrowUp: "turnU",
-      ArrowDown: "turnD",
-      KeyJ: "turnL",
-      KeyL: "turnR",
-      KeyI: "turnU",
-      KeyK: "turnD",
-    },
-    f_ = 0.0021,
-    d_ = 0.0052,
-    p_ = 2.1,
-    m_ = 3,
-    If = 58,
-    g_ = { pause: 1 };
-
 export { FX_MODULE, createFx, showcaseFx };

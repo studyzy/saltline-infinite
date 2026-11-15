@@ -2851,6 +2851,9 @@ float metalnessFactor = metalness * slORM.b;
     qt = Math.round((EA - Ya) / Ls),
     Qs = Math.round((SA - ol) / Ls),
     yf = 0.5;
+  // Same port grid as level.js's Li: the stub physics below needs the west
+  // edge of the built port so the ground does not extend past the city.
+  var GROUND_GRID = { x0: -44, z0: -40, size: 80 };
   function d3(i) {
     let e = [],
       t = !0,
@@ -2921,7 +2924,7 @@ float metalnessFactor = metalness * slORM.b;
             let F = (oi.groundY - U) / C;
             if (F > 0 && F < w) {
               let hx = q + D * F;
-              if (hx <= oi.quayX || hx < Li.x0) (w = F), (O = 1);
+              if (hx <= oi.quayX || hx < GROUND_GRID.x0) (w = F), (O = 1);
               else {
                 let ne = (oi.seaY - U) / C;
                 ne > 0 && ne < w && ((w = ne), (O = 2));
@@ -3013,7 +3016,7 @@ float metalnessFactor = metalness * slORM.b;
             : (s.multiplyScalar(1 / E), !o.raycast(_, s, E - 0.05));
         },
         groundHeight(_, M, E = 50) {
-          let w = _ <= oi.quayX || _ < Li.x0 ? oi.groundY : oi.seaY;
+          let w = _ <= oi.quayX || _ < GROUND_GRID.x0 ? oi.groundY : oi.seaY;
           for (let S = 0; S < e.length; S++) {
             let z = e[S];
             z.bulletOnly ||
@@ -3084,7 +3087,7 @@ float metalnessFactor = metalness * slORM.b;
           }
           let D = _.y + M.y * E,
             C = w * 0.7,
-            G = _.x <= oi.quayX + C || _.x < Li.x0 ? oi.groundY : -50,
+            G = _.x <= oi.quayX + C || _.x < GROUND_GRID.x0 ? oi.groundY : -50,
             j = null,
             N = 1 / 0,
             Q = T + (z ? u1 : 0.08) + 1e-4;
